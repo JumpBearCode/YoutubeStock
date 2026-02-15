@@ -14,6 +14,7 @@ from .resolver import resolve_channel
 from .rss import fetch_channel_feed, get_latest_videos
 from .sleep_strategy import inter_channel_sleep, random_sleep
 from .storage import StorageManager
+from .parser import parse_transcript
 from .transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 
 
@@ -251,6 +252,93 @@ def cmd_transcript(cfg: dict, verbose: bool, language: str | None, channel_filte
         print("\nNo new files to transcribe.")
 
 
+def _format_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+def cmd_parse(cfg: dict, verbose: bool, model: str, channel_filter: str | None, path: str | None) -> None:
+    from .parser import MODEL_PRICING
+    pricing = MODEL_PRICING.get(model, {})
+    pricing_info = f"${pricing.get('input', '?')}/M in, ${pricing.get('output', '?')}/M out" if pricing else "unknown pricing"
+    print(f"Using model: {model} ({pricing_info})")
+
+    total_files = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_cost = 0.0
+    skipped = 0
+
+    if path:
+        p = Path(path)
+        if not p.exists():
+            print(f"Error: File not found: {path}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  Parsing: {path}")
+        result = parse_transcript(str(p), model=model, verbose=verbose)
+        if result and result.success:
+            print(f"  Parsed OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+            total_files += 1
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            total_cost += result.cost
+        elif result:
+            print(f"  Parse FAILED: {result.error}")
+    else:
+        storage_dir = Path(cfg["storage_dir"])
+        channels = cfg["channels"]
+
+        for channel in channels:
+            if channel_filter and channel.channel_name != channel_filter:
+                continue
+
+            transcript_dir = storage_dir / channel.channel_name / "transcript"
+            if not transcript_dir.exists():
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No transcript directory, skipping.")
+                continue
+
+            txt_files = [
+                f for f in sorted(transcript_dir.rglob("*.txt"))
+                if not f.name.endswith("_parsed.txt")
+            ]
+
+            if not txt_files:
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No transcript files found.")
+                continue
+
+            print(f"\n[{channel.channel_name}] {len(txt_files)} transcript file(s) to check")
+
+            for txt_file in txt_files:
+                parsed_path = txt_file.with_name(txt_file.stem + "_parsed.txt")
+                if parsed_path.exists():
+                    skipped += 1
+                    if verbose:
+                        print(f"  Skipping (already exists): {parsed_path}")
+                    continue
+
+                print(f"  Parsing: {txt_file}")
+                result = parse_transcript(str(txt_file), model=model, verbose=verbose)
+                if result and result.success:
+                    print(f"  Parsed OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+                    total_files += 1
+                    total_input_tokens += result.input_tokens
+                    total_output_tokens += result.output_tokens
+                    total_cost += result.cost
+                elif result:
+                    print(f"  Parse FAILED: {result.error}")
+
+    if total_files > 0:
+        print(f"\nSummary: {total_files} file(s) parsed, tokens: {_format_tokens(total_input_tokens)} in / {_format_tokens(total_output_tokens)} out, total cost: ${total_cost:.4f}")
+    elif not path:
+        skipped_msg = f" ({skipped} already parsed)" if skipped else ""
+        print(f"\nNo new files to parse.{skipped_msg}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="YoutubeStock - YouTube Video/Audio Downloader")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -267,6 +355,12 @@ def main():
     transcript_parser.add_argument("--channel", type=str, default=None, help="Transcribe only this channel")
     transcript_parser.add_argument("--path", type=str, default=None, help="Transcribe a specific audio file")
 
+    parse_parser = subparsers.add_parser("parse", help="Parse transcripts: merge fragments into paragraphs and fix transliterations")
+    parse_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parse_parser.add_argument("--channel", type=str, default=None, help="Parse only this channel's transcripts")
+    parse_parser.add_argument("--path", type=str, default=None, help="Parse a specific transcript .txt file")
+    parse_parser.add_argument("--model", type=str, default="gpt-5-mini", choices=["gpt-5-mini", "gpt-5.1"], help="OpenAI model (default: gpt-5-mini)")
+
     args = parser.parse_args()
 
     try:
@@ -281,6 +375,8 @@ def main():
         cmd_download(cfg, args.verbose)
     elif args.command == "transcript":
         cmd_transcript(cfg, args.verbose, args.language, args.channel, args.path)
+    elif args.command == "parse":
+        cmd_parse(cfg, args.verbose, args.model, args.channel, args.path)
 
     print("\nDone.")
 
