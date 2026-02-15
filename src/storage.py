@@ -44,6 +44,10 @@ class StorageManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def get_entry(self, channel_name: str, video_id: str) -> dict | None:
+        history = self._load_history(channel_name)
+        return history.get(video_id)
+
     def is_downloaded(self, channel_name: str, video_id: str) -> bool:
         history = self._load_history(channel_name)
         return video_id in history

@@ -13,6 +13,8 @@ wheels/
 .storage/
 # YoutubeStock summary
 .report/
+# YoutubeStock logs
+.logs/
 
 # Environment
 .env

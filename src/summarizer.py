@@ -131,6 +131,7 @@ class SummaryResult:
     output_tokens: int = 0
     cost: float = 0.0
     error: str | None = None
+    prompt: str | None = None
 
 
 def _calc_cost(input_tokens: int, output_tokens: int) -> float:
@@ -246,6 +247,7 @@ def summarize_transcript(
             input_tokens=total_input,
             output_tokens=total_output,
             cost=cost,
+            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))
@@ -293,6 +295,7 @@ def summarize_batch(
             input_tokens=total_input,
             output_tokens=total_output,
             cost=cost,
+            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))
