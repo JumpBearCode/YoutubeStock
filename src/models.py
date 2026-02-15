@@ -26,3 +26,11 @@ class DownloadResult:
     success: bool
     file_path: str | None = None
     error: str | None = None
+
+
+@dataclass
+class TranscriptResult:
+    success: bool
+    transcript_path: str | None = None
+    duration_seconds: float = 0.0
+    error: str | None = None

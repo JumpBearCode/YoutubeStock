@@ -11,3 +11,6 @@ wheels/
 
 # YoutubeStock storage
 .storage/
+
+# Environment
+.env

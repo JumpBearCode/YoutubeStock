@@ -1,7 +1,12 @@
 import argparse
 import importlib
+import json
+import os
 import sys
 from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from .downloader import download_audio, download_video
 from .models import ChannelConfig, VideoInfo
@@ -9,6 +14,7 @@ from .resolver import resolve_channel
 from .rss import fetch_channel_feed, get_latest_videos
 from .sleep_strategy import inter_channel_sleep, random_sleep
 from .storage import StorageManager
+from .transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 
 
 def load_config() -> dict:
@@ -124,6 +130,127 @@ def cmd_download(cfg: dict, verbose: bool) -> None:
             inter_channel_sleep(cfg["sleep_min"], cfg["sleep_max"])
 
 
+def _load_transcript_config() -> tuple[str, list[str]]:
+    """Load provider and API keys from .env. Returns (provider, api_keys)."""
+    load_dotenv()
+    provider = os.getenv("TRANSCRIPTION_PROVIDER", "groq").lower()
+    if provider not in PROVIDERS:
+        print(f"Error: Unknown TRANSCRIPTION_PROVIDER '{provider}'. Use 'groq' or 'openai'.", file=sys.stderr)
+        sys.exit(1)
+
+    if provider == "groq":
+        free_key = os.getenv("GROQ_API_KEY")
+        paid_key = os.getenv("GROQ_API_KEY_PAID")
+        api_keys = [k for k in [free_key, paid_key] if k]
+        if not api_keys:
+            print("Error: GROQ_API_KEY not set. Create a .env file with your key.", file=sys.stderr)
+            print("See .env.example for reference.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            print("Error: OPENAI_API_KEY not set. Create a .env file with your key.", file=sys.stderr)
+            print("See .env.example for reference.", file=sys.stderr)
+            sys.exit(1)
+        api_keys = [api_key]
+
+    return provider, api_keys
+
+
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    h, m, s = total // 3600, (total % 3600) // 60, total % 60
+    if h > 0:
+        return f"{h}h{m:02d}m{s:02d}s"
+    return f"{m}m{s:02d}s"
+
+
+def cmd_transcript(cfg: dict, verbose: bool, language: str | None, channel_filter: str | None, path: str | None) -> None:
+    provider, api_keys = _load_transcript_config()
+    cost_per_minute = PROVIDERS[provider]["cost_per_minute"]
+    fallback_info = f", fallback: paid key" if len(api_keys) > 1 else ""
+    print(f"Using provider: {provider} (model: {PROVIDERS[provider]['model']}, ${cost_per_minute}/min{fallback_info})")
+
+    total_duration = 0.0
+    total_files = 0
+
+    if path:
+        # --path mode: single file, output in same directory
+        audio_path = path
+        if not Path(audio_path).exists():
+            print(f"Error: File not found: {audio_path}", file=sys.stderr)
+            sys.exit(1)
+        output_path = str(Path(audio_path).with_suffix(".json"))
+        if Path(output_path).exists():
+            print(f"  Skipping (already exists): {output_path}")
+            return
+        print(f"  Transcribing: {audio_path}")
+        result = transcribe(audio_path, output_path, api_keys, provider, language, verbose)
+        if result.success:
+            cost = result.duration_seconds / 60 * cost_per_minute
+            print(f"  Transcript OK: {result.transcript_path} (duration: {_format_duration(result.duration_seconds)}, cost: ${cost:.3f})")
+            total_duration += result.duration_seconds
+            total_files += 1
+        else:
+            print(f"  Transcript FAILED: {result.error}")
+    else:
+        # Channel or all-channels mode
+        storage_dir = Path(cfg["storage_dir"])
+        channels = cfg["channels"]
+
+        for channel in channels:
+            if channel_filter and channel.channel_name != channel_filter:
+                continue
+
+            history_file = storage_dir / channel.channel_name / "download_history.json"
+            if not history_file.exists():
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No download history, skipping.")
+                continue
+
+            history = json.loads(history_file.read_text())
+            audio_paths = [
+                entry["audio_path"]
+                for entry in history.values()
+                if entry.get("audio_path")
+            ]
+
+            if not audio_paths:
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No audio files found.")
+                continue
+
+            print(f"\n[{channel.channel_name}] {len(audio_paths)} audio file(s) to check")
+
+            for audio_path in audio_paths:
+                if not Path(audio_path).exists():
+                    if verbose:
+                        print(f"  Skipping (file missing): {audio_path}")
+                    continue
+
+                transcript_path = audio_path_to_transcript_path(audio_path)
+                if Path(transcript_path).exists():
+                    if verbose:
+                        print(f"  Skipping (already exists): {transcript_path}")
+                    continue
+
+                print(f"  Transcribing: {audio_path}")
+                result = transcribe(audio_path, transcript_path, api_keys, provider, language, verbose)
+                if result.success:
+                    cost = result.duration_seconds / 60 * cost_per_minute
+                    print(f"  Transcript OK: {result.transcript_path} (duration: {_format_duration(result.duration_seconds)}, cost: ${cost:.3f})")
+                    total_duration += result.duration_seconds
+                    total_files += 1
+                else:
+                    print(f"  Transcript FAILED: {result.error}")
+
+    if total_files > 0:
+        total_cost = total_duration / 60 * cost_per_minute
+        print(f"\nSummary: {total_files} file(s) transcribed, total duration: {_format_duration(total_duration)}, total cost: ${total_cost:.3f}")
+    elif not path:
+        print("\nNo new files to transcribe.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="YoutubeStock - YouTube Video/Audio Downloader")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +260,12 @@ def main():
 
     download_parser = subparsers.add_parser("download", help="Download latest N videos per channel")
     download_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    transcript_parser = subparsers.add_parser("transcript", help="Transcribe downloaded audio using OpenAI Whisper")
+    transcript_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    transcript_parser.add_argument("--language", "-l", type=str, default=None, help="Force language (ISO-639-1: 'en', 'zh'). Auto-detects if omitted.")
+    transcript_parser.add_argument("--channel", type=str, default=None, help="Transcribe only this channel")
+    transcript_parser.add_argument("--path", type=str, default=None, help="Transcribe a specific audio file")
 
     args = parser.parse_args()
 
@@ -146,6 +279,8 @@ def main():
         cmd_check(cfg, args.verbose)
     elif args.command == "download":
         cmd_download(cfg, args.verbose)
+    elif args.command == "transcript":
+        cmd_transcript(cfg, args.verbose, args.language, args.channel, args.path)
 
     print("\nDone.")
 
