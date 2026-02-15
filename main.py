@@ -15,6 +15,7 @@ from src.storage import StorageManager
 from src.transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 from src.parser import parse_transcript
 from src.summarizer import summarize_batch, extract_info_from_path
+from src.emailer import send_report_email
 from src.sleep_strategy import random_sleep, inter_channel_sleep
 
 LOG_DIR = ".logs"
@@ -308,6 +309,19 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
             f.write(token_section)
 
         print(token_section)
+
+        # ── Phase 3: Email report ─────────────────────────────────
+        print(f"\n{'='*60}")
+        print(f"Phase 3: Email Report")
+        print(f"{'='*60}")
+
+        email_result = send_report_email(
+            summary_result.output_path, verbose=verbose
+        )
+        if email_result.success:
+            print(f"\nEmail sent to: {email_result.recipient}")
+        else:
+            print(f"\nEmail skipped: {email_result.error}")
     else:
         print(f"\nSummary FAILED: {summary_result.error}")
 
