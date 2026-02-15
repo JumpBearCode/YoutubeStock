@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcriber, and AI analyst. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, and summarizes investment views with buy/sell signals using a ReAct agent.
+YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcriber, and AI analyst. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, summarizes investment views with buy/sell signals using a ReAct agent, and emails the daily report via Gmail SMTP.
 
 ## Commands
 
@@ -39,11 +39,11 @@ There are no tests, linter, or type checker configured.
 
 ## Architecture
 
-The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads.
+The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads. The full pipeline (`main.py`) runs all phases sequentially and emails the final report via Gmail SMTP.
 
 **Data flow:**
 - **Download pipeline:** `config.py` → `resolver` (URL → channel_id/name via yt-dlp, cached) → `rss` (channel_id → RSS feed → VideoInfo list) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
-- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search)
+- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
 
 Key modules in `src/`:
 - **cli.py** — Entry point, argparse commands, orchestration loop for all commands
@@ -54,6 +54,7 @@ Key modules in `src/`:
 - **transcriber.py** — Audio compression (ffmpeg), chunking for large files, Whisper API transcription (Groq default, OpenAI fallback), JSON + TXT output. Supports multiple API keys with automatic fallback (free → paid)
 - **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses OpenAI Agents SDK (gpt-5-mini default). Outputs `_parsed.txt`
 - **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using LangChain ReAct agent (gpt-5.1) + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
+- **emailer.py** — Sends summary report via Gmail SMTP (App Password). Uses only Python built-in `smtplib` + `email`. Subject: `每日美股总结 {YYYY-MM-DD}`. Configured via `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `GMAIL_RECIPIENT` in `.env`
 - **models.py** — Dataclasses: `ChannelConfig`, `VideoInfo`, `DownloadResult`, `TranscriptResult`
 - **sleep_strategy.py** — Triangular-distribution random delays between downloads
 
@@ -74,3 +75,12 @@ Configured via `.env` (see `.env.example`). Supports two providers:
 Set `TRANSCRIPTION_PROVIDER=groq` or `openai` in `.env`.
 
 `OPENAI_API_KEY` is also required for the `parse` and `summary` commands. The `summary` command uses DuckDuckGo for web search (no extra API key needed).
+
+## Email
+
+After batch summary, `main.py` sends the report via Gmail SMTP (Phase 3). Configured via `.env`:
+- `GMAIL_ADDRESS` — Gmail account
+- `GMAIL_APP_PASSWORD` — 16-char App Password (Google Account → 2-Step Verification → App Passwords)
+- `GMAIL_RECIPIENT` — Recipient email (defaults to self)
+
+Zero external dependencies (Python built-in `smtplib`). If credentials are missing, email is silently skipped.

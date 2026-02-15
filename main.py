@@ -274,34 +274,21 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
             log_file.write("\n")
             log_file.flush()
 
-        # Build token usage section
+        # Build token usage section (Markdown table)
         summary_in = summary_result.input_tokens
         summary_out = summary_result.output_tokens
         summary_cost_val = summary_result.cost
         total_cost = transcript_cost + parse_cost + summary_cost_val
 
-        transcript_line = (
-            f"Transcript: {_format_duration(transcript_duration)}  "
-            f"(${transcript_cost:.4f})"
-        )
-        parse_line = (
-            f"Parse:      {_format_tokens(parse_input_tokens)} in / "
-            f"{_format_tokens(parse_output_tokens)} out  (${parse_cost:.4f})"
-        )
-        summary_line = (
-            f"Summary:    {_format_tokens(summary_in)} in / "
-            f"{_format_tokens(summary_out)} out  (${summary_cost_val:.4f})"
-        )
-        total_line = f"Total:      ${total_cost:.4f}"
-
         token_section = (
-            "\n============================================================\n"
-            "Token Usage\n"
-            "============================================================\n"
-            f"{transcript_line}\n"
-            f"{parse_line}\n"
-            f"{summary_line}\n"
-            f"{total_line}\n"
+            "\n---\n\n"
+            "## Token Usage\n\n"
+            "| Phase | Details | Cost |\n"
+            "|-------|---------|------|\n"
+            f"| Transcript | {_format_duration(transcript_duration)} | ${transcript_cost:.4f} |\n"
+            f"| Parse | {_format_tokens(parse_input_tokens)} in / {_format_tokens(parse_output_tokens)} out | ${parse_cost:.4f} |\n"
+            f"| Summary | {_format_tokens(summary_in)} in / {_format_tokens(summary_out)} out | ${summary_cost_val:.4f} |\n"
+            f"| **Total** | | **${total_cost:.4f}** |\n"
         )
 
         # Append to report file

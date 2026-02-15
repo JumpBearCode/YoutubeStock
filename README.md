@@ -1,6 +1,6 @@
 # YoutubeStock
 
-YouTube 频道监控 & 视频/音频下载 & 语音转文字 & AI 分析工具。通过 RSS 检测新视频，使用 yt-dlp 下载，Whisper API 转录音频，AI Agent 整理段落并提取投资观点，内置防封策略。
+YouTube 频道监控 & 视频/音频下载 & 语音转文字 & AI 分析 & 邮件推送工具。通过 RSS 检测新视频，使用 yt-dlp 下载，Whisper API 转录音频，AI Agent 整理段落并提取投资观点，完成后自动发送每日总结邮件，内置防封策略。
 
 ## 安装
 
@@ -58,6 +58,22 @@ GROQ_API_KEY_PAID=gsk-your-paid-key    # 可选
 # OpenAI API key（parse / summary 命令必需，transcript 用 openai provider 时也需要）
 OPENAI_API_KEY=sk-your-key
 ```
+
+### 邮件推送配置
+
+Pipeline 完成 summary 后自动发送每日总结邮件。使用 Gmail SMTP + App Password，零外部依赖。
+
+1. 打开 [Google 安全设置](https://myaccount.google.com/security)，开启 **两步验证**
+2. 打开 [App Passwords](https://myaccount.google.com/apppasswords)，创建一个（名称填 `YoutubeStock`）
+3. 在 `.env` 中添加：
+
+```bash
+GMAIL_ADDRESS=你的邮箱@gmail.com
+GMAIL_APP_PASSWORD=生成的16位密码
+GMAIL_RECIPIENT=你的邮箱@gmail.com    # 收件人，可以和发件人一样
+```
+
+未配置时邮件自动跳过，不影响其他功能。
 
 ## 用法
 
@@ -130,6 +146,22 @@ uv run python -m src.cli summary -v                        # 详细输出
 - 每期总结包含：频道、日期、标题、市场观点、买入/加仓/卖出建议
 - 如果博主提了买入但没给卖出点位，自动搜索目标价/阻力位补充（标注"网络搜索补充"）
 - 搜索次数上限 5 次，使用 DuckDuckGo（无需额外 API key）
+
+### 全量 Pipeline — `main.py`
+
+一条命令跑完全流程：下载 → 转录 → 整理 → 汇总 → 发邮件：
+
+```bash
+uv run python main.py                      # 默认：每频道最近 1 个视频
+uv run python main.py --last_n 3 -v         # 每频道最近 3 个，详细输出
+uv run python main.py --force-summary -v    # 强制跑 summary（即使没有新视频）
+```
+
+- **Phase 1**: Check & Process — 检测新视频、下载、转录、parse
+- **Phase 2**: Batch Summary — 汇总所有 `_parsed.txt` 为一份报告
+- **Phase 3**: Email Report — 将报告发送到指定邮箱（标题：`每日美股总结 {日期}`）
+
+日志自动保存到 `.logs/log_{时间戳}.txt`。
 
 ## 文件结构
 
