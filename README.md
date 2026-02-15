@@ -1,6 +1,6 @@
 # YoutubeStock
 
-YouTube 频道监控 & 视频/音频下载 & 语音转文字工具。通过 RSS 检测新视频，使用 yt-dlp 下载，Whisper API 转录音频，内置防封策略。
+YouTube 频道监控 & 视频/音频下载 & 语音转文字 & AI 分析工具。通过 RSS 检测新视频，使用 yt-dlp 下载，Whisper API 转录音频，AI Agent 整理段落并提取投资观点，内置防封策略。
 
 ## 安装
 
@@ -54,7 +54,9 @@ GROQ_API_KEY_PAID=gsk-your-paid-key    # 可选
 
 # 或者用 OpenAI: $0.36/小时
 # TRANSCRIPTION_PROVIDER=openai
-# OPENAI_API_KEY=sk-your-key
+
+# OpenAI API key（parse / summary 命令必需，transcript 用 openai provider 时也需要）
+OPENAI_API_KEY=sk-your-key
 ```
 
 ## 用法
@@ -97,6 +99,38 @@ uv run python -m src.cli transcript --language zh -v        # 指定语言，详
 - 支持中英文，不指定语言时自动检测
 - Groq free key 触发限流时自动切换到 paid key
 
+### `parse` — 转录文本整理
+
+将 Whisper 逐行碎片转录整理为自然段落，修正音译错误（如"按摩店"→AMD），使用 OpenAI Agents SDK：
+
+```bash
+uv run python -m src.cli parse                          # 所有频道
+uv run python -m src.cli parse --channel "老李玩钱"       # 指定频道
+uv run python -m src.cli parse --path path/to/file.txt   # 单个文件
+uv run python -m src.cli parse --model gpt-5.1           # 用 gpt-5.1（默认 gpt-5-mini）
+```
+
+- 输出 `{标题}_parsed.txt`，与原转录文件在同一目录
+- 已有 `_parsed.txt` 会自动跳过
+- 自动统计 token 用量和费用
+
+### `summary` — AI 投资观点提取
+
+读取 `_parsed.txt`，用 LangChain ReAct Agent（gpt-5.1 + DuckDuckGo 搜索）提取买入/加仓/卖出点位：
+
+```bash
+uv run python -m src.cli summary                          # 所有频道
+uv run python -m src.cli summary --channel "老李玩钱"       # 指定频道
+uv run python -m src.cli summary --path path/to/_parsed.txt # 单个文件
+uv run python -m src.cli summary -v                        # 详细输出
+```
+
+- **`--path` 模式**：单文件 → 单 `_summary.txt`，输出在同目录
+- **频道/全局模式**：所有 `_parsed.txt` 汇总为一份报告，按每期视频逐期总结，输出到 `.report/summary_{时间戳}.txt`
+- 每期总结包含：频道、日期、标题、市场观点、买入/加仓/卖出建议
+- 如果博主提了买入但没给卖出点位，自动搜索目标价/阻力位补充（标注"网络搜索补充"）
+- 搜索次数上限 5 次，使用 DuckDuckGo（无需额外 API key）
+
 ## 文件结构
 
 下载内容存在 `.storage/` 下：
@@ -108,7 +142,14 @@ uv run python -m src.cli transcript --language zh -v        # 指定语言，详
     ├── download_history.json       # 该频道已下载视频记录
     ├── video/{时间戳}/{标题}.mp4
     ├── audio/{时间戳}/{标题}.mp3
-    └── transcript/{时间戳}/{标题}.json + .txt
+    └── transcript/{时间戳}/
+        ├── {标题}.json             # Whisper 时间戳 JSON
+        ├── {标题}.txt              # Whisper 纯文本
+        ├── {标题}_parsed.txt       # parse agent 整理后
+        └── {标题}_summary.txt      # summary agent 总结（--path 模式）
+
+.report/
+└── summary_{时间戳}.txt             # summary agent 汇总报告（频道/全局模式）
 ```
 
 ## 防封策略

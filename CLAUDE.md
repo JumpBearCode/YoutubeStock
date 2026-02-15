@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YoutubeStock is a YouTube channel monitor, video/audio downloader, and audio transcriber. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, and transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI).
+YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcriber, and AI analyst. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, and summarizes investment views with buy/sell signals using a ReAct agent.
 
 ## Commands
 
@@ -22,15 +22,28 @@ uv run python -m src.cli transcript                       # All channels
 uv run python -m src.cli transcript --channel "老李玩钱"    # Specific channel
 uv run python -m src.cli transcript --path path/to/file.mp3  # Single file
 uv run python -m src.cli transcript --language zh -v       # Force language, verbose
+
+# Parse: merge Whisper fragments into paragraphs, fix transliterations (requires OPENAI_API_KEY)
+uv run python -m src.cli parse                            # All channels
+uv run python -m src.cli parse --channel "老李玩钱"         # Specific channel
+uv run python -m src.cli parse --path path/to/file.txt     # Single file
+uv run python -m src.cli parse --model gpt-5.1             # Use gpt-5.1 (default: gpt-5-mini)
+
+# Summary: extract market views & trade signals via ReAct agent (requires OPENAI_API_KEY)
+uv run python -m src.cli summary                           # All channels → .report/summary_{ts}.txt
+uv run python -m src.cli summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
+uv run python -m src.cli summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
 ```
 
 There are no tests, linter, or type checker configured.
 
 ## Architecture
 
-The CLI has three commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), and `transcript` (convert downloaded audio to JSON + TXT via Whisper API). Download commands pull video+audio with sleep delays between downloads.
+The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads.
 
-**Data flow:** `config.py` → `resolver` (URL → channel_id/name via yt-dlp, cached) → `rss` (channel_id → RSS feed → VideoInfo list) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON).
+**Data flow:**
+- **Download pipeline:** `config.py` → `resolver` (URL → channel_id/name via yt-dlp, cached) → `rss` (channel_id → RSS feed → VideoInfo list) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
+- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search)
 
 Key modules in `src/`:
 - **cli.py** — Entry point, argparse commands, orchestration loop for all commands
@@ -39,6 +52,8 @@ Key modules in `src/`:
 - **downloader.py** — Wraps yt-dlp for video/audio downloads with 3-retry exponential backoff
 - **storage.py** — `StorageManager` handles download history (per-channel JSON) and output directory structure
 - **transcriber.py** — Audio compression (ffmpeg), chunking for large files, Whisper API transcription (Groq default, OpenAI fallback), JSON + TXT output. Supports multiple API keys with automatic fallback (free → paid)
+- **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses OpenAI Agents SDK (gpt-5-mini default). Outputs `_parsed.txt`
+- **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using LangChain ReAct agent (gpt-5.1) + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
 - **models.py** — Dataclasses: `ChannelConfig`, `VideoInfo`, `DownloadResult`, `TranscriptResult`
 - **sleep_strategy.py** — Triangular-distribution random delays between downloads
 
@@ -48,7 +63,7 @@ Key modules in `src/`:
 
 ## Storage
 
-All state lives in `.storage/` (gitignored). Per-channel subdirectories contain `download_history.json` and `video/` + `audio/` + `transcript/` folders organized by timestamp. Transcripts output both `.json` (array of `{timestamp, text}`) and `.txt` (plain text, one segment per line).
+All state lives in `.storage/` (gitignored). Per-channel subdirectories contain `download_history.json` and `video/` + `audio/` + `transcript/` folders organized by timestamp. Transcripts output `.json` (array of `{timestamp, text}`), `.txt` (plain text), `_parsed.txt` (cleaned paragraphs), and `_summary.txt` (--path mode only). Batch summary reports go to `.report/summary_{timestamp}.txt`.
 
 ## Transcription
 
@@ -57,3 +72,5 @@ Configured via `.env` (see `.env.example`). Supports two providers:
 - **OpenAI** — `whisper-1`, $0.36/hour.
 
 Set `TRANSCRIPTION_PROVIDER=groq` or `openai` in `.env`.
+
+`OPENAI_API_KEY` is also required for the `parse` and `summary` commands. The `summary` command uses DuckDuckGo for web search (no extra API key needed).

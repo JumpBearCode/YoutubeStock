@@ -11,6 +11,9 @@ wheels/
 
 # YoutubeStock storage
 .storage/
+# YoutubeStock summary
+.report/
 
 # Environment
 .env
+.DS_Store

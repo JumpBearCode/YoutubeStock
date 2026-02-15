@@ -15,6 +15,7 @@ from .rss import fetch_channel_feed, get_latest_videos
 from .sleep_strategy import inter_channel_sleep, random_sleep
 from .storage import StorageManager
 from .parser import parse_transcript
+from .summarizer import summarize_transcript, summarize_batch, extract_info_from_path
 from .transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 
 
@@ -339,6 +340,70 @@ def cmd_parse(cfg: dict, verbose: bool, model: str, channel_filter: str | None, 
         print(f"\nNo new files to parse.{skipped_msg}")
 
 
+def cmd_summary(cfg: dict, verbose: bool, channel_filter: str | None, path: str | None) -> None:
+    from .summarizer import MODEL, MODEL_PRICING
+    pricing = MODEL_PRICING[MODEL]
+    pricing_info = f"${pricing['input']}/M in, ${pricing['output']}/M out"
+    print(f"Using model: {MODEL} ({pricing_info})")
+
+    if path:
+        # --path mode: single _parsed.txt -> single _summary.txt in same directory
+        p = Path(path)
+        if not p.exists():
+            print(f"Error: File not found: {path}", file=sys.stderr)
+            sys.exit(1)
+        channel_name, date = extract_info_from_path(path)
+        print(f"  Summarizing: {path}")
+        result = summarize_transcript(str(p), channel_name, date, verbose)
+        if result and result.success:
+            print(f"  Summary OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+        elif result:
+            print(f"  Summary FAILED: {result.error}")
+        else:
+            print(f"  Skipped (already exists or empty)")
+    else:
+        # Channel/all mode: collect all _parsed.txt -> one report in .report/
+        storage_dir = Path(cfg["storage_dir"])
+        channels = cfg["channels"]
+        all_parsed: list[tuple[str, str, str]] = []  # (path, channel_name, date)
+
+        for channel in channels:
+            if channel_filter and channel.channel_name != channel_filter:
+                continue
+
+            transcript_dir = storage_dir / channel.channel_name / "transcript"
+            if not transcript_dir.exists():
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No transcript directory, skipping.")
+                continue
+
+            parsed_files = sorted(transcript_dir.rglob("*_parsed.txt"))
+
+            if not parsed_files:
+                if verbose:
+                    print(f"\n[{channel.channel_name}] No parsed transcript files found.")
+                continue
+
+            print(f"\n[{channel.channel_name}] {len(parsed_files)} parsed file(s) found")
+            for pf in parsed_files:
+                channel_name, date = extract_info_from_path(str(pf))
+                all_parsed.append((str(pf), channel_name, date))
+                if verbose:
+                    print(f"  Including: {pf}")
+
+        if not all_parsed:
+            print("\nNo parsed files found.")
+            return
+
+        print(f"\nSummarizing {len(all_parsed)} file(s) into one report...")
+        result = summarize_batch(all_parsed, verbose)
+        if result.success:
+            print(f"  Report OK: {result.output_path}")
+            print(f"  Tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f}")
+        else:
+            print(f"  Summary FAILED: {result.error}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="YoutubeStock - YouTube Video/Audio Downloader")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -361,6 +426,11 @@ def main():
     parse_parser.add_argument("--path", type=str, default=None, help="Parse a specific transcript .txt file")
     parse_parser.add_argument("--model", type=str, default="gpt-5-mini", choices=["gpt-5-mini", "gpt-5.1"], help="OpenAI model (default: gpt-5-mini)")
 
+    summary_parser = subparsers.add_parser("summary", help="Summarize parsed transcripts: extract market views and trade signals")
+    summary_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    summary_parser.add_argument("--channel", type=str, default=None, help="Summarize only this channel")
+    summary_parser.add_argument("--path", type=str, default=None, help="Summarize a specific _parsed.txt file")
+
     args = parser.parse_args()
 
     try:
@@ -377,6 +447,8 @@ def main():
         cmd_transcript(cfg, args.verbose, args.language, args.channel, args.path)
     elif args.command == "parse":
         cmd_parse(cfg, args.verbose, args.model, args.channel, args.path)
+    elif args.command == "summary":
+        cmd_summary(cfg, args.verbose, args.channel, args.path)
 
     print("\nDone.")
 
