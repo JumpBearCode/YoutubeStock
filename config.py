@@ -8,7 +8,6 @@ GLOBAL_LAST_N = 3
 SLEEP_MIN = 10
 SLEEP_MAX = 45
 STORAGE_DIR = ".storage"
-VIDEO_FORMAT = "bestvideo+bestaudio/best"
 AUDIO_FORMAT = "bestaudio/best"
 AUDIO_CODEC = "mp3"
 AUDIO_QUALITY = "192"

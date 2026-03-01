@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .downloader import download_audio, download_video
+from .downloader import download_audio
 from .models import ChannelConfig, VideoInfo
 from .resolver import resolve_channel
 from .rss import fetch_channel_feed, get_latest_videos
@@ -37,7 +37,6 @@ def load_config() -> dict:
         "sleep_min": config.SLEEP_MIN,
         "sleep_max": config.SLEEP_MAX,
         "storage_dir": config.STORAGE_DIR,
-        "video_format": config.VIDEO_FORMAT,
         "audio_format": config.AUDIO_FORMAT,
         "audio_codec": config.AUDIO_CODEC,
         "audio_quality": config.AUDIO_QUALITY,
@@ -50,17 +49,6 @@ def _process_video(
 ) -> None:
     timestamp = video.published
 
-    video_dir = storage.get_video_dir(video.channel_name, timestamp)
-    if verbose:
-        print(f"  Downloading video to {video_dir}")
-    video_result = download_video(video, video_dir, cfg["video_format"])
-    if video_result.success:
-        print(f"  Video OK: {video_result.file_path}")
-    else:
-        print(f"  Video FAILED: {video_result.error}")
-
-    random_sleep(cfg["sleep_min"], cfg["sleep_max"])
-
     audio_dir = storage.get_audio_dir(video.channel_name, timestamp)
     if verbose:
         print(f"  Downloading audio to {audio_dir}")
@@ -72,11 +60,11 @@ def _process_video(
     else:
         print(f"  Audio FAILED: {audio_result.error}")
 
-    if video_result.success or audio_result.success:
+    if audio_result.success:
         storage.mark_downloaded(
             video,
-            video_result.file_path if video_result.success else None,
-            audio_result.file_path if audio_result.success else None,
+            None,
+            audio_result.file_path,
         )
 
 
