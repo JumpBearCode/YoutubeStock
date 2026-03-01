@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yt_dlp
 
-from .models import ChannelConfig
+from ..models import ChannelConfig
 
 _CACHE_FILE = Path(".storage") / "channel_cache.json"
 

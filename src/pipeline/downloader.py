@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yt_dlp
 
-from .models import DownloadResult, VideoInfo
+from ..models import DownloadResult, VideoInfo
 
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = [30, 60, 120]

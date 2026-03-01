@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .models import VideoInfo
+from ..models import VideoInfo
 
 TIMESTAMP_FORMAT = "%Y-%m-%d-%H-%M-%S"
 

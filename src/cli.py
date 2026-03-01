@@ -7,15 +7,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .downloader import download_audio
 from .models import VideoInfo
-from .resolver import resolve_channel
-from .rss import get_latest_videos
 from .sleep_strategy import inter_channel_sleep, random_sleep
-from .storage import StorageManager
-from .parser import parse_transcript
-from .summarizer import summarize_transcript, summarize_batch, extract_info_from_path
-from .transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
+from .pipeline.downloader import download_audio
+from .pipeline.resolver import resolve_channel
+from .pipeline.rss import get_latest_videos
+from .pipeline.storage import StorageManager
+from .agent.parser import parse_transcript
+from .agent.summarizer import summarize_transcript, summarize_batch, extract_info_from_path
+from .agent.transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 
 
 def load_config() -> dict:
@@ -245,7 +245,7 @@ def _format_tokens(n: int) -> str:
 
 
 def cmd_parse(cfg: dict, verbose: bool, model: str, channel_filter: str | None, path: str | None) -> None:
-    from .parser import MODEL_PRICING
+    from .agent.parser import MODEL_PRICING
     pricing = MODEL_PRICING.get(model, {})
     pricing_info = f"${pricing.get('input', '?')}/M in, ${pricing.get('output', '?')}/M out" if pricing else "unknown pricing"
     print(f"Using model: {model} ({pricing_info})")
@@ -324,7 +324,7 @@ def cmd_parse(cfg: dict, verbose: bool, model: str, channel_filter: str | None, 
 
 
 def cmd_summary(cfg: dict, verbose: bool, channel_filter: str | None, path: str | None) -> None:
-    from .summarizer import MODEL, MODEL_PRICING
+    from .agent.summarizer import MODEL, MODEL_PRICING
     pricing = MODEL_PRICING[MODEL]
     pricing_info = f"${pricing['input']}/M in, ${pricing['output']}/M out"
     print(f"Using model: {MODEL} ({pricing_info})")

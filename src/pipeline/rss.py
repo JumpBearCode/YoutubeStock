@@ -4,7 +4,7 @@ from datetime import datetime
 import feedparser
 import yt_dlp
 
-from .models import ChannelConfig, VideoInfo
+from ..models import ChannelConfig, VideoInfo
 
 RSS_URL_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)"

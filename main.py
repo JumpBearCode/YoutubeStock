@@ -10,13 +10,13 @@ from src.cli import (
     _format_duration,
     _format_tokens,
 )
-from src.rss import get_latest_videos
-from src.storage import StorageManager
-from src.transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
-from src.parser import parse_transcript
-from src.summarizer import summarize_batch, extract_info_from_path
 from src.emailer import send_report_email
 from src.sleep_strategy import random_sleep, inter_channel_sleep
+from src.pipeline.rss import get_latest_videos
+from src.pipeline.storage import StorageManager
+from src.agent.transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
+from src.agent.parser import parse_transcript
+from src.agent.summarizer import summarize_batch, extract_info_from_path
 
 LOG_DIR = ".logs"
 
