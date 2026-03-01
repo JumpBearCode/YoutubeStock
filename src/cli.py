@@ -3,15 +3,14 @@ import importlib
 import json
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from .downloader import download_audio
-from .models import ChannelConfig, VideoInfo
+from .models import VideoInfo
 from .resolver import resolve_channel
-from .rss import fetch_channel_feed, get_latest_videos
+from .rss import get_latest_videos
 from .sleep_strategy import inter_channel_sleep, random_sleep
 from .storage import StorageManager
 from .parser import parse_transcript
@@ -44,7 +43,7 @@ def load_config() -> dict:
     }
 
 
-def _process_video(
+def _process_entry(
     video: VideoInfo, cfg: dict, storage: StorageManager, verbose: bool
 ) -> None:
     timestamp = video.published
@@ -61,11 +60,7 @@ def _process_video(
         print(f"  Audio FAILED: {audio_result.error}")
 
     if audio_result.success:
-        storage.mark_downloaded(
-            video,
-            None,
-            audio_result.file_path,
-        )
+        storage.mark_downloaded(video, audio_result.file_path)
 
 
 def cmd_check(cfg: dict, verbose: bool) -> None:
@@ -86,7 +81,7 @@ def cmd_check(cfg: dict, verbose: bool) -> None:
 
         for j, video in enumerate(new_videos):
             print(f"\n  Processing ({j+1}/{len(new_videos)}): {video.title}")
-            _process_video(video, cfg, storage, verbose)
+            _process_entry(video, cfg, storage, verbose)
 
             if j < len(new_videos) - 1:
                 random_sleep(cfg["sleep_min"], cfg["sleep_max"])
@@ -111,7 +106,7 @@ def cmd_download(cfg: dict, verbose: bool) -> None:
         print(f"  {len(to_download)} video(s) to download (skipping {len(videos) - len(to_download)} already downloaded)")
         for j, video in enumerate(to_download):
             print(f"\n  Processing ({j+1}/{len(to_download)}): {video.title}")
-            _process_video(video, cfg, storage, verbose)
+            _process_entry(video, cfg, storage, verbose)
 
             if j < len(to_download) - 1:
                 random_sleep(cfg["sleep_min"], cfg["sleep_max"])
@@ -393,7 +388,7 @@ def cmd_summary(cfg: dict, verbose: bool, channel_filter: str | None, path: str 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="YoutubeStock - YouTube Video/Audio Downloader")
+    parser = argparse.ArgumentParser(description="YoutubeStock - YouTube Audio Downloader & Analyst")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     check_parser = subparsers.add_parser("check", help="Check for new videos and download them")

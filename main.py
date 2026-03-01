@@ -6,7 +6,7 @@ from pathlib import Path
 from src.cli import (
     load_config,
     _load_transcript_config,
-    _process_video,
+    _process_entry,
     _format_duration,
     _format_tokens,
 )
@@ -155,7 +155,7 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
                     if did_download:
                         random_sleep(cfg["sleep_min"], cfg["sleep_max"])
                     print(f"  → Downloading...")
-                    _process_video(video, cfg, storage, verbose)
+                    _process_entry(video, cfg, storage, verbose)
                     did_download = True
                 else:
                     if verbose:

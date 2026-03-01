@@ -32,12 +32,6 @@ class StorageManager:
         hfile.parent.mkdir(parents=True, exist_ok=True)
         hfile.write_text(json.dumps(history, indent=2, default=str))
 
-    def get_video_dir(self, channel_name: str, timestamp: datetime) -> Path:
-        ts = timestamp.strftime(TIMESTAMP_FORMAT)
-        path = self.storage_dir / channel_name / "video" / ts
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
     def get_audio_dir(self, channel_name: str, timestamp: datetime) -> Path:
         ts = timestamp.strftime(TIMESTAMP_FORMAT)
         path = self.storage_dir / channel_name / "audio" / ts
@@ -53,14 +47,13 @@ class StorageManager:
         return video_id in history
 
     def mark_downloaded(
-        self, video: VideoInfo, video_path: str | None, audio_path: str | None
+        self, video: VideoInfo, audio_path: str | None
     ) -> None:
         history = self._load_history(video.channel_name)
         history[video.video_id] = {
             "title": video.title,
             "published": video.published.isoformat(),
             "link": video.link,
-            "video_path": video_path,
             "audio_path": audio_path,
             "downloaded_at": datetime.now().isoformat(),
         }
