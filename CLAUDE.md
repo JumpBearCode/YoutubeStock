@@ -12,41 +12,47 @@ YoutubeStock is a YouTube channel monitor, audio downloader, audio transcriber, 
 # Install dependencies (requires ffmpeg: brew install ffmpeg)
 uv sync
 
-# Run the CLI
-uv run python -m src.cli download          # Download latest N videos per channel
-uv run python -m src.cli check             # Check for new videos only
-uv run python -m src.cli download --verbose # With verbose output
+# Run the CLI (Typer, supports -h for help)
+uv run python cli.py -h                    # Show all commands
+uv run python cli.py download              # Download latest N videos per channel
+uv run python cli.py check                 # Check for new videos only
+uv run python cli.py download --verbose    # With verbose output
+
+# Full pipeline: download → transcribe → parse → summary → email
+uv run python cli.py run                   # Default: last_n=1
+uv run python cli.py run --last_n 3 -v     # 3 videos per channel, verbose
+uv run python cli.py run --force-summary   # Always run summary even if no new videos
 
 # Transcribe audio to JSON + TXT (requires API key in .env, see .env.example)
-uv run python -m src.cli transcript                       # All channels
-uv run python -m src.cli transcript --channel "老李玩钱"    # Specific channel
-uv run python -m src.cli transcript --path path/to/file.mp3  # Single file
-uv run python -m src.cli transcript --language zh -v       # Force language, verbose
+uv run python cli.py transcript                       # All channels
+uv run python cli.py transcript --channel "老李玩钱"    # Specific channel
+uv run python cli.py transcript --path path/to/file.mp3  # Single file
+uv run python cli.py transcript --language zh -v       # Force language, verbose
 
 # Parse: merge Whisper fragments into paragraphs, fix transliterations (requires OPENAI_API_KEY)
-uv run python -m src.cli parse                            # All channels
-uv run python -m src.cli parse --channel "老李玩钱"         # Specific channel
-uv run python -m src.cli parse --path path/to/file.txt     # Single file
-uv run python -m src.cli parse --model gpt-5.1             # Use gpt-5.1 (default: gpt-5-mini)
+uv run python cli.py parse                            # All channels
+uv run python cli.py parse --channel "老李玩钱"         # Specific channel
+uv run python cli.py parse --path path/to/file.txt     # Single file
+uv run python cli.py parse --model gpt-5.1             # Use gpt-5.1 (default: gpt-5-mini)
 
 # Summary: extract market views & trade signals via ReAct agent (requires OPENAI_API_KEY)
-uv run python -m src.cli summary                           # All channels → .report/summary_{ts}.txt
-uv run python -m src.cli summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
-uv run python -m src.cli summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
+uv run python cli.py summary                           # All channels → .report/summary_{ts}.txt
+uv run python cli.py summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
+uv run python cli.py summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
 ```
 
 There are no tests, linter, or type checker configured.
 
 ## Architecture
 
-The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads. The full pipeline (`main.py`) runs all phases sequentially and emails the final report via Gmail SMTP.
+The CLI (`cli.py`, Typer) has six commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), `summary` (extract market views & trade signals via LangChain ReAct agent with web search), and `run` (full pipeline: download → transcribe → parse → summary → email). Download commands pull video+audio with sleep delays between downloads.
 
 **Data flow:**
 - **Download pipeline:** `config.py` → `youtube.resolve_channel` (URL → channel_id/name via yt-dlp, cached) → `youtube.get_latest_videos` (yt-dlp flat extraction with approximate dates, filters upcoming/live) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
 - **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
 
 Key modules in `src/`:
-- **cli.py** — Entry point, argparse commands, orchestration loop for all commands
+- **cli.py** (root) — Typer CLI entry point, all commands and orchestration logic
 - **youtube.py** — Resolves channel URLs (@handle or /channel/UCxxx) to channel_id + name (cached in `.storage/channel_cache.json`); fetches latest videos via yt-dlp flat extraction with `approximate_date` for timestamps and `live_status` filtering (skips upcoming/live streams)
 - **downloader.py** — Wraps yt-dlp for video/audio downloads with 3-retry exponential backoff
 - **storage.py** — `StorageManager` handles download history (per-channel JSON) and output directory structure
@@ -77,7 +83,7 @@ Set `TRANSCRIPTION_PROVIDER=groq` or `openai` in `.env`.
 
 ## Email
 
-After batch summary, `main.py` sends the report via Gmail SMTP (Phase 3). Configured via `.env`:
+After batch summary, `cli.py run` sends the report via Gmail SMTP (Phase 3). Configured via `.env`:
 - `GMAIL_ADDRESS` — Gmail account
 - `GMAIL_APP_PASSWORD` — 16-char App Password (Google Account → 2-Step Verification → App Passwords)
 - `GMAIL_RECIPIENT` — Recipient email (defaults to self)

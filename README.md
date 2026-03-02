@@ -82,8 +82,8 @@ GMAIL_RECIPIENT=你的邮箱@gmail.com    # 收件人，可以和发件人一样
 拉取每个频道最近 N 个视频（由 `last_n` 控制），跳过已下载的：
 
 ```bash
-uv run python -m src.cli download
-uv run python -m src.cli download --verbose   # 显示详细路径信息
+uv run python cli.py download
+uv run python cli.py download --verbose   # 显示详细路径信息
 ```
 
 适合第一次使用，批量拉取近期内容。
@@ -93,8 +93,8 @@ uv run python -m src.cli download --verbose   # 显示详细路径信息
 获取 RSS 全量 feed，过滤掉已下载的，只下载新视频（由CHECK_MAX_NEW定义）：
 
 ```bash
-uv run python -m src.cli check
-uv run python -m src.cli check --verbose
+uv run python cli.py check
+uv run python cli.py check --verbose
 ```
 
 适合定期运行（比如 cron），增量同步新内容。
@@ -104,10 +104,10 @@ uv run python -m src.cli check --verbose
 把已下载的音频通过 Whisper API 转成文字，输出 `.json`（带时间戳）和 `.txt`（纯文本）：
 
 ```bash
-uv run python -m src.cli transcript                        # 所有频道
-uv run python -m src.cli transcript --channel "老李玩钱"     # 指定频道
-uv run python -m src.cli transcript --path path/to/file.mp3  # 单个文件
-uv run python -m src.cli transcript --language zh -v        # 指定语言，详细输出
+uv run python cli.py transcript                        # 所有频道
+uv run python cli.py transcript --channel "老李玩钱"     # 指定频道
+uv run python cli.py transcript --path path/to/file.mp3  # 单个文件
+uv run python cli.py transcript --language zh -v        # 指定语言，详细输出
 ```
 
 - 已有转录文件会自动跳过
@@ -120,10 +120,10 @@ uv run python -m src.cli transcript --language zh -v        # 指定语言，详
 将 Whisper 逐行碎片转录整理为自然段落，修正音译错误（如"按摩店"→AMD），使用 OpenAI Agents SDK：
 
 ```bash
-uv run python -m src.cli parse                          # 所有频道
-uv run python -m src.cli parse --channel "老李玩钱"       # 指定频道
-uv run python -m src.cli parse --path path/to/file.txt   # 单个文件
-uv run python -m src.cli parse --model gpt-5.1           # 用 gpt-5.1（默认 gpt-5-mini）
+uv run python cli.py parse                          # 所有频道
+uv run python cli.py parse --channel "老李玩钱"       # 指定频道
+uv run python cli.py parse --path path/to/file.txt   # 单个文件
+uv run python cli.py parse --model gpt-5.1           # 用 gpt-5.1（默认 gpt-5-mini）
 ```
 
 - 输出 `{标题}_parsed.txt`，与原转录文件在同一目录
@@ -135,10 +135,10 @@ uv run python -m src.cli parse --model gpt-5.1           # 用 gpt-5.1（默认 
 读取 `_parsed.txt`，用 LangChain ReAct Agent（gpt-5.1 + DuckDuckGo 搜索）提取买入/加仓/卖出点位：
 
 ```bash
-uv run python -m src.cli summary                          # 所有频道
-uv run python -m src.cli summary --channel "老李玩钱"       # 指定频道
-uv run python -m src.cli summary --path path/to/_parsed.txt # 单个文件
-uv run python -m src.cli summary -v                        # 详细输出
+uv run python cli.py summary                          # 所有频道
+uv run python cli.py summary --channel "老李玩钱"       # 指定频道
+uv run python cli.py summary --path path/to/_parsed.txt # 单个文件
+uv run python cli.py summary -v                        # 详细输出
 ```
 
 - **`--path` 模式**：单文件 → 单 `_summary.txt`，输出在同目录
@@ -147,14 +147,14 @@ uv run python -m src.cli summary -v                        # 详细输出
 - 如果博主提了买入但没给卖出点位，自动搜索目标价/阻力位补充（标注"网络搜索补充"）
 - 搜索次数上限 5 次，使用 DuckDuckGo（无需额外 API key）
 
-### 全量 Pipeline — `main.py`
+### `run` — 全量 Pipeline
 
 一条命令跑完全流程：下载 → 转录 → 整理 → 汇总 → 发邮件：
 
 ```bash
-uv run python main.py                      # 默认：每频道最近 1 个视频
-uv run python main.py --last_n 3 -v         # 每频道最近 3 个，详细输出
-uv run python main.py --force-summary -v    # 强制跑 summary（即使没有新视频）
+uv run python cli.py run                      # 默认：每频道最近 1 个视频
+uv run python cli.py run --last_n 3 -v         # 每频道最近 3 个，详细输出
+uv run python cli.py run --force-summary -v    # 强制跑 summary（即使没有新视频）
 ```
 
 - **Phase 1**: Check & Process — 检测新视频、下载、转录、parse
