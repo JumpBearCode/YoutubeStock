@@ -2,16 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-import warnings
-
-from ddgs import DDGS
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-    from langgraph.prebuilt import create_react_agent
+from src.agent.claude_runner import run_claude_session
 
 SUMMARY_PROMPT_TEMPLATE = """\
 你是一个专业的财经视频内容分析助手。以下是来自 YouTube 频道「{channel_name}」于 {date} 发布的视频转录文本。
@@ -69,6 +60,10 @@ SUMMARY_PROMPT_TEMPLATE = """\
 
 （如果没有卖出建议且没有买入/加仓建议，写"无"，不需要表格）
 （如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
+
+## 重要
+
+请直接输出结构化总结，不要在开头添加任何思考过程、分析过程或前言文字。输出应以"**频道：**"开头。
 
 ## 转录文本
 
@@ -135,16 +130,14 @@ BATCH_PROMPT_TEMPLATE = """\
 （如果没有卖出建议且没有买入/加仓建议，写"无"，不需要表格）
 （如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
 
+## 重要
+
+请直接输出结构化总结，不要在开头添加任何思考过程、分析过程或前言文字。输出应以"---"分隔线开头。
+
 ## 转录文本
 
 {texts}
 """
-
-MODEL = "gpt-5.1"
-
-MODEL_PRICING = {
-    "gpt-5.1": {"input": 1.25, "output": 10.00},
-}
 
 REPORT_DIR = ".storage/reports"
 
@@ -153,60 +146,7 @@ REPORT_DIR = ".storage/reports"
 class SummaryResult:
     success: bool
     output_path: str | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost: float = 0.0
     error: str | None = None
-    prompt: str | None = None
-
-
-def _calc_cost(input_tokens: int, output_tokens: int) -> float:
-    pricing = MODEL_PRICING[MODEL]
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
-
-
-def _create_capped_search_tool(max_calls: int = 5):
-    ddgs = DDGS()
-    call_count = 0
-
-    @tool
-    def capped_search(query: str) -> str:
-        """Search the web for stock target prices and resistance levels. Only use this for looking up sell/exit price targets."""
-        nonlocal call_count
-        if call_count >= max_calls:
-            return "搜索次数已达上限，请根据已有信息完成分析。"
-        call_count += 1
-        results = ddgs.text(query, max_results=5)
-        if not results:
-            return "未找到相关结果。"
-        return "\n\n".join(
-            f"{r['title']}\n{r['body']}\n{r['href']}" for r in results
-        )
-
-    return capped_search
-
-
-def _run_agent(prompt: str) -> tuple[str, int, int]:
-    """Run the ReAct agent with the given prompt. Returns (content, input_tokens, output_tokens)."""
-    llm = ChatOpenAI(model=MODEL)
-    search_tool = _create_capped_search_tool(max_calls=5)
-    agent = create_react_agent(llm, tools=[search_tool])
-
-    result = agent.invoke({"messages": [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": "请开始分析。"},
-    ]})
-
-    total_input = 0
-    total_output = 0
-    for msg in result["messages"]:
-        usage = getattr(msg, "usage_metadata", None)
-        if usage:
-            total_input += usage.get("input_tokens", 0)
-            total_output += usage.get("output_tokens", 0)
-
-    final_content = result["messages"][-1].content
-    return final_content, total_input, total_output
 
 
 def extract_info_from_path(parsed_path: str) -> tuple[str, str]:
@@ -233,8 +173,6 @@ def summarize_transcript(
 ) -> SummaryResult | None:
     """Single-file mode: one _parsed.txt -> one _summary.txt in the same directory.
     Returns SummaryResult on success/failure, None if skipped."""
-    load_dotenv()
-
     path = Path(parsed_path)
     if not path.exists():
         return SummaryResult(success=False, error=f"File not found: {parsed_path}")
@@ -257,23 +195,31 @@ def summarize_transcript(
             print(f"  Skipping (empty file): {parsed_path}")
         return None
 
-    try:
-        prompt = SUMMARY_PROMPT_TEMPLATE.format(
-            channel_name=channel_name,
-            date=date,
-            text=text,
-        )
-        content, total_input, total_output = _run_agent(prompt)
-        cost = _calc_cost(total_input, total_output)
+    prompt = SUMMARY_PROMPT_TEMPLATE.format(
+        channel_name=channel_name,
+        date=date,
+        text=text,
+    )
 
-        output_path.write_text(content, encoding="utf-8")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = f".logs/claude/summary_{timestamp}.jsonl"
+
+    try:
+        result = run_claude_session(
+            prompt=prompt,
+            tools="WebSearch,WebFetch",
+            allowed_tools=["WebSearch", "WebFetch"],
+            model="sonnet",
+            log_path=log_path,
+        )
+
+        if not result.success:
+            return SummaryResult(success=False, error=result.error)
+
+        output_path.write_text(result.output, encoding="utf-8")
         return SummaryResult(
             success=True,
             output_path=str(output_path),
-            input_tokens=total_input,
-            output_tokens=total_output,
-            cost=cost,
-            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))
@@ -287,41 +233,56 @@ def summarize_batch(
 
     parsed_files: list of (parsed_path, channel_name, date)
     """
-    load_dotenv()
-
-    # Build concatenated text block
-    sections = []
-    for parsed_path, channel_name, date in parsed_files:
-        path = Path(parsed_path)
-        text = path.read_text(encoding="utf-8")
-        title = path.stem
-        if title.endswith("_parsed"):
-            title = title[: -len("_parsed")]
-        sections.append(
-            f"--- 频道：{channel_name} | 日期：{date} | 标题：{title} ---\n\n{text}"
+    # Single file: use the single-video template for better prompt quality
+    if len(parsed_files) == 1:
+        parsed_path, channel_name, date = parsed_files[0]
+        text = Path(parsed_path).read_text(encoding="utf-8")
+        prompt = SUMMARY_PROMPT_TEMPLATE.format(
+            channel_name=channel_name,
+            date=date,
+            text=text,
         )
+    else:
+        # Build concatenated text block
+        sections = []
+        for parsed_path, channel_name, date in parsed_files:
+            path = Path(parsed_path)
+            text = path.read_text(encoding="utf-8")
+            title = path.stem
+            if title.endswith("_parsed"):
+                title = title[: -len("_parsed")]
+            sections.append(
+                f"--- 频道：{channel_name} | 日期：{date} | 标题：{title} ---\n\n{text}"
+            )
 
-    combined_texts = "\n\n".join(sections)
+        combined_texts = "\n\n".join(sections)
+        prompt = BATCH_PROMPT_TEMPLATE.format(texts=combined_texts)
+
+    ts_log = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = f".logs/claude/summary_batch_{ts_log}.jsonl"
 
     try:
-        prompt = BATCH_PROMPT_TEMPLATE.format(texts=combined_texts)
-        content, total_input, total_output = _run_agent(prompt)
-        cost = _calc_cost(total_input, total_output)
+        result = run_claude_session(
+            prompt=prompt,
+            tools="WebSearch,WebFetch",
+            allowed_tools=["WebSearch", "WebFetch"],
+            model="sonnet",
+            log_path=log_path,
+        )
+
+        if not result.success:
+            return SummaryResult(success=False, error=result.error)
 
         # Output to .report/summary_{timestamp}.txt
         report_dir = Path(REPORT_DIR)
         report_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        output_path = report_dir / f"summary_{timestamp}.txt"
-        output_path.write_text(content, encoding="utf-8")
+        ts_report = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        output_path = report_dir / f"summary_{ts_report}.txt"
+        output_path.write_text(result.output, encoding="utf-8")
 
         return SummaryResult(
             success=True,
             output_path=str(output_path),
-            input_tokens=total_input,
-            output_tokens=total_output,
-            cost=cost,
-            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))

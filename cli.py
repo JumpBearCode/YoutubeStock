@@ -119,14 +119,6 @@ def _format_duration(seconds: float) -> str:
     return f"{m}m{s:02d}s"
 
 
-def _format_tokens(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.2f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}K"
-    return str(n)
-
-
 def _download_videos(cfg: dict, verbose: bool, mode: str = "download") -> None:
     """Shared logic for check and download commands.
 
@@ -293,20 +285,14 @@ def parse(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="详细输出")] = False,
     channel: Annotated[Optional[str], typer.Option("--channel", help="只整理该频道")] = None,
     path: Annotated[Optional[str], typer.Option("--path", help="整理单个 .txt 文件")] = None,
-    model: Annotated[str, typer.Option("--model", help="OpenAI 模型")] = "gpt-5-mini",
+    model: Annotated[str, typer.Option("--model", help="Claude model")] = "sonnet",
 ):
     """Parse transcripts: merge fragments into paragraphs and fix transliterations."""
     cfg = _load_cfg()
 
-    from src.agent.parser import MODEL_PRICING
-    pricing = MODEL_PRICING.get(model, {})
-    pricing_info = f"${pricing.get('input', '?')}/M in, ${pricing.get('output', '?')}/M out" if pricing else "unknown pricing"
-    print(f"Using model: {model} ({pricing_info})")
+    print(f"Using engine: Claude Code (plan), model: {model}")
 
     total_files = 0
-    total_input_tokens = 0
-    total_output_tokens = 0
-    total_cost = 0.0
     skipped = 0
 
     if path:
@@ -317,11 +303,8 @@ def parse(
         print(f"  Parsing: {path}")
         result = parse_transcript(str(p), model=model, verbose=verbose)
         if result and result.success:
-            print(f"  Parsed OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+            print(f"  Parsed OK: {result.output_path}")
             total_files += 1
-            total_input_tokens += result.input_tokens
-            total_output_tokens += result.output_tokens
-            total_cost += result.cost
         elif result:
             print(f"  Parse FAILED: {result.error}")
     else:
@@ -361,16 +344,13 @@ def parse(
                 print(f"  Parsing: {txt_file}")
                 result = parse_transcript(str(txt_file), model=model, verbose=verbose)
                 if result and result.success:
-                    print(f"  Parsed OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+                    print(f"  Parsed OK: {result.output_path}")
                     total_files += 1
-                    total_input_tokens += result.input_tokens
-                    total_output_tokens += result.output_tokens
-                    total_cost += result.cost
                 elif result:
                     print(f"  Parse FAILED: {result.error}")
 
     if total_files > 0:
-        print(f"\nSummary: {total_files} file(s) parsed, tokens: {_format_tokens(total_input_tokens)} in / {_format_tokens(total_output_tokens)} out, total cost: ${total_cost:.4f}")
+        print(f"\nSummary: {total_files} file(s) parsed via Claude Code")
     elif not path:
         skipped_msg = f" ({skipped} already parsed)" if skipped else ""
         print(f"\nNo new files to parse.{skipped_msg}")
@@ -387,10 +367,7 @@ def summary(
     """Summarize parsed transcripts: extract market views and trade signals."""
     cfg = _load_cfg()
 
-    from src.agent.summarizer import MODEL, MODEL_PRICING
-    pricing = MODEL_PRICING[MODEL]
-    pricing_info = f"${pricing['input']}/M in, ${pricing['output']}/M out"
-    print(f"Using model: {MODEL} ({pricing_info})")
+    print(f"Using engine: Claude Code (plan), tools: WebSearch + WebFetch")
 
     if path:
         p = Path(path)
@@ -401,7 +378,7 @@ def summary(
         print(f"  Summarizing: {path}")
         result = summarize_transcript(str(p), channel_name, date, verbose)
         if result and result.success:
-            print(f"  Summary OK: {result.output_path} (tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f})")
+            print(f"  Summary OK: {result.output_path}")
         elif result:
             print(f"  Summary FAILED: {result.error}")
         else:
@@ -443,7 +420,6 @@ def summary(
         result = summarize_batch(all_parsed, verbose)
         if result.success:
             print(f"  Report OK: {result.output_path}")
-            print(f"  Tokens: {_format_tokens(result.input_tokens)} in / {_format_tokens(result.output_tokens)} out, cost: ${result.cost:.4f}")
         else:
             print(f"  Summary FAILED: {result.error}")
 
@@ -494,7 +470,7 @@ def run(
     sys.stderr = TeeWriter(original_stderr, log_file)
 
     try:
-        _run_pipeline(last_n, language, verbose, force_summary, log_file)
+        _run_pipeline(last_n, language, verbose, force_summary)
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
@@ -502,7 +478,7 @@ def run(
         print(f"Log saved to: {log_path}")
 
 
-def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool, log_file):
+def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool):
     cfg = _load_cfg()
 
     # Override last_n
@@ -531,12 +507,9 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
             for v in new_videos:
                 print(f"  NEW: {v.title}")
 
-    # Cost tracking
+    # Cost tracking (transcript only — parse/summary use Claude Code plan)
     transcript_duration = 0.0
     transcript_cost = 0.0
-    parse_input_tokens = 0
-    parse_output_tokens = 0
-    parse_cost = 0.0
 
     if not has_any_new and not force_summary:
         print("\nAll channels are up to date, nothing to do.")
@@ -613,15 +586,7 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
                     print(f"  → Parsing...")
                     parse_result = parse_transcript(txt_path, verbose=verbose)
                     if parse_result and parse_result.success:
-                        print(
-                            f"  → Parsed OK "
-                            f"({_format_tokens(parse_result.input_tokens)} in / "
-                            f"{_format_tokens(parse_result.output_tokens)} out, "
-                            f"${parse_result.cost:.4f})"
-                        )
-                        parse_input_tokens += parse_result.input_tokens
-                        parse_output_tokens += parse_result.output_tokens
-                        parse_cost += parse_result.cost
+                        print(f"  → Parsed OK: {parse_result.output_path}")
                     elif parse_result:
                         print(f"  → Parse FAILED: {parse_result.error}")
                         continue
@@ -667,42 +632,17 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
 
     if summary_result.success:
         print(f"\nReport OK: {summary_result.output_path}")
-        print(
-            f"Tokens: {_format_tokens(summary_result.input_tokens)} in / "
-            f"{_format_tokens(summary_result.output_tokens)} out, "
-            f"cost: ${summary_result.cost:.4f}"
-        )
 
-        # Write full prompt to log file only (not console)
-        if summary_result.prompt:
-            log_file.write(f"\n{'='*60}\n")
-            log_file.write("Full Summary Prompt\n")
-            log_file.write(f"{'='*60}\n")
-            log_file.write(summary_result.prompt)
-            log_file.write("\n")
-            log_file.flush()
-
-        # Build token usage section
-        summary_in = summary_result.input_tokens
-        summary_out = summary_result.output_tokens
-        summary_cost_val = summary_result.cost
-        total_cost = transcript_cost + parse_cost + summary_cost_val
-
-        token_section = (
-            "\n---\n\n"
-            "## Token Usage\n\n"
-            "| Phase | Details | Cost |\n"
-            "|-------|---------|------|\n"
-            f"| Transcript | {_format_duration(transcript_duration)} | ${transcript_cost:.4f} |\n"
-            f"| Parse | {_format_tokens(parse_input_tokens)} in / {_format_tokens(parse_output_tokens)} out | ${parse_cost:.4f} |\n"
-            f"| Summary | {_format_tokens(summary_in)} in / {_format_tokens(summary_out)} out | ${summary_cost_val:.4f} |\n"
-            f"| **Total** | | **${total_cost:.4f}** |\n"
-        )
-
-        with open(summary_result.output_path, "a", encoding="utf-8") as f:
-            f.write(token_section)
-
-        print(token_section)
+        # Append transcript cost to report
+        if transcript_cost > 0:
+            cost_section = (
+                "\n---\n\n"
+                f"Whisper transcript cost: {_format_duration(transcript_duration)}, ${transcript_cost:.4f}\n"
+                "Parse & Summary: Claude Code (plan, no extra cost)\n"
+            )
+            with open(summary_result.output_path, "a", encoding="utf-8") as f:
+                f.write(cost_section)
+            print(cost_section)
 
         # ── Phase 3: Email report ─────────────────────────────────
         print(f"\n{'='*60}")
