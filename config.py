@@ -12,3 +12,4 @@ AUDIO_FORMAT = "bestaudio/best"
 AUDIO_CODEC = "mp3"
 AUDIO_QUALITY = "192"
 CHECK_MAX_NEW = 5           # check 命令每频道最多下载几个新视频
+HISTORY_MAX_PER_CHANNEL = 7 # 每频道 history 最多保留几条，超出自动裁剪

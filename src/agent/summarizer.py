@@ -146,7 +146,7 @@ MODEL_PRICING = {
     "gpt-5.1": {"input": 1.25, "output": 10.00},
 }
 
-REPORT_DIR = ".report"
+REPORT_DIR = ".storage/reports"
 
 
 @dataclass

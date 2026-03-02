@@ -39,6 +39,7 @@ def load_config() -> dict:
         "audio_codec": config.AUDIO_CODEC,
         "audio_quality": config.AUDIO_QUALITY,
         "check_max_new": getattr(config, "CHECK_MAX_NEW", 5),
+        "history_max": getattr(config, "HISTORY_MAX_PER_CHANNEL", 0),
     }
 
 
@@ -63,7 +64,7 @@ def _process_entry(
 
 
 def cmd_check(cfg: dict, verbose: bool) -> None:
-    storage = StorageManager(cfg["storage_dir"])
+    storage = StorageManager(cfg["storage_dir"], history_max=cfg["history_max"])
     channels = cfg["channels"]
     max_new = cfg["check_max_new"]
 
@@ -90,7 +91,7 @@ def cmd_check(cfg: dict, verbose: bool) -> None:
 
 
 def cmd_download(cfg: dict, verbose: bool) -> None:
-    storage = StorageManager(cfg["storage_dir"])
+    storage = StorageManager(cfg["storage_dir"], history_max=cfg["history_max"])
     channels = cfg["channels"]
 
     for i, channel in enumerate(channels):
@@ -179,34 +180,35 @@ def cmd_transcript(cfg: dict, verbose: bool, language: str | None, channel_filte
             print(f"  Transcript FAILED: {result.error}")
     else:
         # Channel or all-channels mode
-        storage_dir = Path(cfg["storage_dir"])
+        storage = StorageManager(cfg["storage_dir"], history_max=cfg["history_max"])
         channels = cfg["channels"]
 
         for channel in channels:
             if channel_filter and channel.channel_name != channel_filter:
                 continue
 
-            history_file = storage_dir / channel.channel_name / "download_history.json"
+            history_file = Path(cfg["storage_dir"]) / channel.channel_name / "download_history.json"
             if not history_file.exists():
                 if verbose:
                     print(f"\n[{channel.channel_name}] No download history, skipping.")
                 continue
 
             history = json.loads(history_file.read_text())
-            audio_paths = [
-                entry["audio_path"]
-                for entry in history.values()
+            # Collect (video_id, audio_path) pairs
+            audio_entries = [
+                (vid_id, entry["audio_path"])
+                for vid_id, entry in history.items()
                 if entry.get("audio_path")
             ]
 
-            if not audio_paths:
+            if not audio_entries:
                 if verbose:
                     print(f"\n[{channel.channel_name}] No audio files found.")
                 continue
 
-            print(f"\n[{channel.channel_name}] {len(audio_paths)} audio file(s) to check")
+            print(f"\n[{channel.channel_name}] {len(audio_entries)} audio file(s) to check")
 
-            for audio_path in audio_paths:
+            for video_id, audio_path in audio_entries:
                 if not Path(audio_path).exists():
                     if verbose:
                         print(f"  Skipping (file missing): {audio_path}")
@@ -225,6 +227,8 @@ def cmd_transcript(cfg: dict, verbose: bool, language: str | None, channel_filte
                     print(f"  Transcript OK: {result.transcript_path} (duration: {_format_duration(result.duration_seconds)}, cost: ${cost:.3f})")
                     total_duration += result.duration_seconds
                     total_files += 1
+                    # Write transcript_path back to history
+                    storage.update_entry(channel.channel_name, video_id, transcript_path=result.transcript_path)
                 else:
                     print(f"  Transcript FAILED: {result.error}")
 

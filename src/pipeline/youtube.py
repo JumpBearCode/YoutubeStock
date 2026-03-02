@@ -18,7 +18,7 @@ def _load_cache() -> dict:
 
 def _save_cache(cache: dict) -> None:
     _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_FILE.write_text(json.dumps(cache, indent=2))
+    _CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
 
 
 def _extract_channel_id_from_url(url: str) -> str | None:
