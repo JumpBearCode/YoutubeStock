@@ -12,7 +12,7 @@ from src.cli import (
 )
 from src.emailer import send_report_email
 from src.sleep_strategy import random_sleep, inter_channel_sleep
-from src.pipeline.rss import get_latest_videos
+from src.pipeline.youtube import get_latest_videos
 from src.pipeline.storage import StorageManager
 from src.agent.transcriber import PROVIDERS, audio_path_to_transcript_path, transcribe
 from src.agent.parser import parse_transcript

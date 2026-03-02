@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcriber, and AI analyst. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, summarizes investment views with buy/sell signals using a ReAct agent, and emails the daily report via Gmail SMTP.
+YoutubeStock is a YouTube channel monitor, audio downloader, audio transcriber, and AI analyst. It detects new videos via yt-dlp flat extraction (with approximate dates and upcoming/live stream filtering), downloads audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, summarizes investment views with buy/sell signals using a ReAct agent, and emails the daily report via Gmail SMTP.
 
 ## Commands
 
@@ -42,13 +42,12 @@ There are no tests, linter, or type checker configured.
 The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads. The full pipeline (`main.py`) runs all phases sequentially and emails the final report via Gmail SMTP.
 
 **Data flow:**
-- **Download pipeline:** `config.py` → `resolver` (URL → channel_id/name via yt-dlp, cached) → `rss` (channel_id → RSS feed → VideoInfo list) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
+- **Download pipeline:** `config.py` → `youtube.resolve_channel` (URL → channel_id/name via yt-dlp, cached) → `youtube.get_latest_videos` (yt-dlp flat extraction with approximate dates, filters upcoming/live) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
 - **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
 
 Key modules in `src/`:
 - **cli.py** — Entry point, argparse commands, orchestration loop for all commands
-- **resolver.py** — Resolves channel URLs (@handle or /channel/UCxxx) to channel_id + name; caches results in `.storage/channel_cache.json`
-- **rss.py** — Fetches YouTube RSS XML feeds via feedparser, parses into `VideoInfo`
+- **youtube.py** — Resolves channel URLs (@handle or /channel/UCxxx) to channel_id + name (cached in `.storage/channel_cache.json`); fetches latest videos via yt-dlp flat extraction with `approximate_date` for timestamps and `live_status` filtering (skips upcoming/live streams)
 - **downloader.py** — Wraps yt-dlp for video/audio downloads with 3-retry exponential backoff
 - **storage.py** — `StorageManager` handles download history (per-channel JSON) and output directory structure
 - **transcriber.py** — Audio compression (ffmpeg), chunking for large files, Whisper API transcription (Groq default, OpenAI fallback), JSON + TXT output. Supports multiple API keys with automatic fallback (free → paid)

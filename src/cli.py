@@ -10,8 +10,7 @@ from dotenv import load_dotenv
 from .models import VideoInfo
 from .sleep_strategy import inter_channel_sleep, random_sleep
 from .pipeline.downloader import download_audio
-from .pipeline.resolver import resolve_channel
-from .pipeline.rss import get_latest_videos
+from .pipeline.youtube import resolve_channel, get_latest_videos
 from .pipeline.storage import StorageManager
 from .agent.parser import parse_transcript
 from .agent.summarizer import summarize_transcript, summarize_batch, extract_info_from_path
