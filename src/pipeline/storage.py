@@ -6,7 +6,7 @@ from pathlib import Path
 from ..models import VideoInfo
 
 TIMESTAMP_FORMAT = "%Y-%m-%d-%H-%M-%S"
-_DEPRECATED_FIELDS = {"video_path"}
+_DEPRECATED_FIELDS = {"video_path", "transcript_path"}
 
 
 class StorageManager:
@@ -111,11 +111,3 @@ class StorageManager:
             "downloaded_at": datetime.now().isoformat(),
         }
         self._save_history(video.channel_name)
-
-    def update_entry(self, channel_name: str, video_id: str, **fields) -> None:
-        """Update specific fields of an existing history entry."""
-        history = self._load_history(channel_name)
-        if video_id not in history:
-            return
-        history[video_id].update(fields)
-        self._save_history(channel_name)

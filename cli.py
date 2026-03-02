@@ -231,7 +231,6 @@ def transcript(
         else:
             print(f"  Transcript FAILED: {result.error}")
     else:
-        storage = StorageManager(cfg["storage_dir"], history_max=cfg["history_max"])
         channels = cfg["channels"]
 
         for ch in channels:
@@ -277,7 +276,6 @@ def transcript(
                     print(f"  Transcript OK: {result.transcript_path} (duration: {_format_duration(result.duration_seconds)}, cost: ${cost:.3f})")
                     total_duration += result.duration_seconds
                     total_files += 1
-                    storage.update_entry(ch.channel_name, video_id, transcript_path=result.transcript_path)
                 else:
                     print(f"  Transcript FAILED: {result.error}")
 
