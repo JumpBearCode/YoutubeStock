@@ -40,6 +40,7 @@ def load_config() -> dict:
         "audio_quality": config.AUDIO_QUALITY,
         "check_max_new": getattr(config, "CHECK_MAX_NEW", 5),
         "history_max": getattr(config, "HISTORY_MAX_PER_CHANNEL", 0),
+        "flat_fetch_n": getattr(config, "FLAT_FETCH_N", 15),
     }
 
 
@@ -70,8 +71,9 @@ def cmd_check(cfg: dict, verbose: bool) -> None:
 
     for i, channel in enumerate(channels):
         print(f"\n[{channel.channel_name}] Checking latest {max_new} videos...")
-        videos = get_latest_videos(channel, max_new)
-        new_videos = [v for v in videos if not storage.is_downloaded(channel.channel_name, v.video_id)]
+        history = storage.get_history(channel.channel_name)
+        videos = get_latest_videos(channel, max_new, history=history, flat_fetch_n=cfg["flat_fetch_n"])
+        new_videos = [v for v in videos if v.video_id not in history]
 
         if not new_videos:
             print(f"  All up to date, no new videos.")
@@ -96,8 +98,9 @@ def cmd_download(cfg: dict, verbose: bool) -> None:
 
     for i, channel in enumerate(channels):
         print(f"\n[{channel.channel_name}] Fetching latest {channel.last_n} videos...")
-        videos = get_latest_videos(channel, channel.last_n)
-        to_download = [v for v in videos if not storage.is_downloaded(channel.channel_name, v.video_id)]
+        history = storage.get_history(channel.channel_name)
+        videos = get_latest_videos(channel, channel.last_n, history=history, flat_fetch_n=cfg["flat_fetch_n"])
+        to_download = [v for v in videos if v.video_id not in history]
 
         if not to_download:
             print(f"  All videos already downloaded.")

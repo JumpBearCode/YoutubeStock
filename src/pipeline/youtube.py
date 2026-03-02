@@ -9,6 +9,8 @@ from ..models import ChannelConfig, VideoInfo
 
 _CACHE_FILE = Path(".storage") / "channel_cache.json"
 
+_DEFAULT_FLAT_FETCH_N = 15
+
 
 def _load_cache() -> dict:
     if _CACHE_FILE.exists():
@@ -107,14 +109,19 @@ def _get_video_timestamp(video_id: str) -> datetime | None:
     return None
 
 
-def _flat_extract(channel_id: str, tab: str, n: int) -> list[tuple[str, str]]:
-    """Flat-extract up to n entries from a channel tab, filtering upcoming/live."""
+def _flat_extract(channel_id: str, tab: str, n: int) -> list[tuple[str, str, int | None]]:
+    """Flat-extract up to n entries from a channel tab with approximate timestamps.
+
+    Returns list of (video_id, title, approx_timestamp_epoch) tuples.
+    Uses extract_flat='in_playlist' + approximate_date for sorting.
+    """
     url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extract_flat": True,
+        "extract_flat": "in_playlist",
         "playlistend": n,
+        "extractor_args": {"youtubetab": {"approximate_date": [""]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -131,36 +138,54 @@ def _flat_extract(channel_id: str, tab: str, n: int) -> list[tuple[str, str]]:
             print(f"  Skipping {live_status}: {title}")
             continue
 
-        candidates.append((video_id, title))
+        approx_ts = entry.get("timestamp")
+        candidates.append((video_id, title, approx_ts))
     return candidates
 
 
-def get_latest_videos(channel: ChannelConfig, n: int) -> list[VideoInfo]:
-    """Fetch latest videos using two-step yt-dlp extraction.
+def get_latest_videos(
+    channel: ChannelConfig, n: int, history: dict | None = None,
+    flat_fetch_n: int | None = None,
+) -> list[VideoInfo]:
+    """Fetch latest videos using approximate sort + history-aware precise fetch.
 
-    Step 1: Flat extraction from both /videos and /streams tabs.
-    Step 2: Per-video extraction to get precise upload timestamp.
-    Results are merged, deduplicated, sorted by time, and trimmed to n.
+    1. Flat extract both /videos and /streams with approximate_date (~0.35s each)
+    2. Sort by approx_ts descending (neutralizes pinned videos)
+    3. Take top n candidates
+    4. For each: use history's stored published time, or fetch precise timestamp
     """
-    # Fetch extra to account for pinned entries
-    fetch_n = n + 2
+    if history is None:
+        history = {}
+    fetch_n = flat_fetch_n or _DEFAULT_FLAT_FETCH_N
 
-    # Step 1: flat-extract from both tabs
+    # Step 1: flat-extract from both tabs with approximate timestamps
     vid_candidates = _flat_extract(channel.channel_id, "videos", fetch_n)
     stream_candidates = _flat_extract(channel.channel_id, "streams", fetch_n)
 
-    # Deduplicate by video_id, preserving order
+    # Deduplicate by video_id, preserving first occurrence
     seen = set()
     candidates = []
-    for vid_id, title in vid_candidates + stream_candidates:
+    for vid_id, title, approx_ts in vid_candidates + stream_candidates:
         if vid_id not in seen:
             seen.add(vid_id)
-            candidates.append((vid_id, title))
+            candidates.append((vid_id, title, approx_ts))
 
-    # Step 2: fetch precise timestamp per video
+    # Step 2: sort by approximate timestamp descending (pins sink to bottom)
+    candidates.sort(key=lambda c: c[2] or 0, reverse=True)
+
+    # Step 3: take top n candidates
+    top_candidates = candidates[:n]
+
+    # Step 4: resolve precise timestamps — from history or per-video fetch
     videos = []
-    for video_id, title in candidates:
-        published = _get_video_timestamp(video_id) or datetime.now()
+    for video_id, title, _approx_ts in top_candidates:
+        entry = history.get(video_id)
+        if entry and entry.get("published"):
+            published = datetime.fromisoformat(entry["published"])
+        else:
+            print(f"  Fetching timestamp: {title}")
+            published = _get_video_timestamp(video_id) or datetime.now()
+
         videos.append(
             VideoInfo(
                 video_id=video_id,
@@ -172,6 +197,6 @@ def get_latest_videos(channel: ChannelConfig, n: int) -> list[VideoInfo]:
             )
         )
 
-    # Sort by publish time (newest first), return top n
+    # Sort by precise published time (newest first), return top n
     videos.sort(key=lambda v: v.published, reverse=True)
     return videos[:n]

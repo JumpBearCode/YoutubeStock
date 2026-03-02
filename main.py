@@ -109,10 +109,11 @@ def _run_pipeline(last_n: int, language: str, verbose: bool, force_summary: bool
     has_any_new = False
 
     for channel in channels:
-        videos = get_latest_videos(channel, last_n)
+        history = storage.get_history(channel.channel_name)
+        videos = get_latest_videos(channel, last_n, history=history, flat_fetch_n=cfg.get("flat_fetch_n", 15))
         new_videos = [
             v for v in videos
-            if not storage.is_downloaded(channel.channel_name, v.video_id)
+            if v.video_id not in history
         ]
         channel_videos.append((channel, videos, new_videos))
         print(f"\n[{channel.channel_name}] {len(videos)} video(s), {len(new_videos)} new")

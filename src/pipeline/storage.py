@@ -92,6 +92,9 @@ class StorageManager:
         history = self._load_history(channel_name)
         return history.get(video_id)
 
+    def get_history(self, channel_name: str) -> dict:
+        return self._load_history(channel_name)
+
     def is_downloaded(self, channel_name: str, video_id: str) -> bool:
         history = self._load_history(channel_name)
         return video_id in history
