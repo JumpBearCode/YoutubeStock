@@ -4,7 +4,7 @@ from pathlib import Path
 
 from src.agent.claude_runner import run_claude_session
 
-SUMMARY_PROMPT_TEMPLATE = """\
+SINGLE_PROMPT = """\
 你是一个专业的财经视频内容分析助手。以下是来自 YouTube 频道「{channel_name}」于 {date} 发布的视频转录文本。
 
 ## 任务
@@ -13,6 +13,8 @@ SUMMARY_PROMPT_TEMPLATE = """\
 
 ### 1. 市场观点总结
 总结博主对当前市场的整体观点和判断，包括对大盘走势、宏观经济、政策影响等方面的看法。
+- 使用 Markdown 无序列表（bullet list）分点总结，按主题分条
+- 每条可包含嵌套子点补充细节
 
 ### 2. 买入/加仓/卖出点位提取
 从文本中提取博主明确提到的操作建议：
@@ -27,14 +29,21 @@ SUMMARY_PROMPT_TEMPLATE = """\
 
 ## 输出格式
 
-请使用 Markdown 格式输出，严格按照以下模板：
+请使用 Markdown 格式输出，严格按照以下模板。不要输出转录文本，不要添加思考过程或前言。
 
-**频道：** {channel_name}
+---
+
+# {channel_name} — 视频标题
+
 **日期：** {date}
 
 ## 市场观点
 
-（总结博主的整体市场观点）
+- 主题一：概述
+  - 补充细节
+  - 补充细节
+- 主题二：概述
+  - 补充细节
 
 ## 买入建议
 
@@ -42,7 +51,7 @@ SUMMARY_PROMPT_TEMPLATE = """\
 |---------|-------------|------|
 | XXXX | $xxx - $xxx | 理由 |
 
-（如果没有买入建议，写"无"，不需要表格）
+（如果没有买入建议，写"无（简短原因，例如：本期为宏观展望，未涉及具体标的）"，不需要表格）
 
 ## 加仓建议
 
@@ -50,7 +59,7 @@ SUMMARY_PROMPT_TEMPLATE = """\
 |---------|-------------|------|
 | XXXX | $xxx - $xxx | 理由 |
 
-（如果没有加仓建议，写"无"，不需要表格）
+（如果没有加仓建议，写"无（简短原因）"，不需要表格）
 
 ## 卖出建议
 
@@ -58,81 +67,84 @@ SUMMARY_PROMPT_TEMPLATE = """\
 |---------|-------------|------|
 | XXXX | $xxx - $xxx | 理由 |
 
-（如果没有卖出建议且没有买入/加仓建议，写"无"，不需要表格）
+（如果没有卖出建议且没有买入/加仓建议，写"无（简短原因）"，不需要表格）
 （如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
-
-## 重要
-
-请直接输出结构化总结，不要在开头添加任何思考过程、分析过程或前言文字。输出应以"**频道：**"开头。
 
 ## 转录文本
 
 {text}
 """
 
-BATCH_PROMPT_TEMPLATE = """\
-你是一个专业的财经视频内容分析助手。以下是来自 YouTube 频道的多期视频转录文本。
+MULTI_PROMPT = """\
+你是一个专业的财经视频内容分析助手。以下是来自多个 YouTube 频道的多期视频转录文本。
 
 ## 任务
 
-请对每一期视频**逐期单独总结**，不要合并。每期视频的总结包含：
+### 第一部分：综合交易信号汇总
+先汇总所有频道/视频中提到的买入、加仓、卖出建议，合并到统一的表格中，表格需包含"来源频道"列标注出处。
 
-### 1. 市场观点总结
-总结该期博主对当前市场的整体观点和判断，包括对大盘走势、宏观经济、政策影响等方面的看法。
+### 第二部分：逐期市场观点
+然后对每一期视频**逐期单独**总结市场观点（不再重复交易信号，已在第一部分汇总）。
+- 使用 Markdown 无序列表（bullet list）分点总结，按主题分条
+- 每条可包含嵌套子点补充细节
 
-### 2. 买入/加仓/卖出点位提取
-从该期文本中提取博主明确提到的操作建议：
-- **买入点位**：股票代码 + 建议买入价格/区间 + 理由
-- **加仓点位**：股票代码 + 建议加仓价格/区间 + 理由
-- **卖出点位**：股票代码 + 建议卖出价格/区间 + 理由
-
-### 3. 卖出点位补充规则
-- **如果该期博主没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具，只总结内容和观点即可。
-- **如果博主推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
+### 卖出点位补充规则
+- **如果所有频道都没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具。
+- **如果有频道推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
 - Web search 仅用于查询卖出点位，不用于其他用途。
 
 ## 输出格式
 
-请使用 Markdown 格式对每期视频逐期输出，各期之间用 `---` 分隔线隔开，严格按照以下模板：
+请使用 Markdown 格式输出，严格按照以下模板。不要输出转录文本，不要添加思考过程或前言。
+
+# 每日美股总结
+
+**日期：** {date}
+
+## 综合交易信号
+
+### 买入建议
+
+| 股票代码 | 价格/区间 | 理由 | 来源频道 |
+|---------|----------|------|---------|
+| XXXX | $xxx - $xxx | 理由 | 频道名 |
+
+（如果所有频道都没有买入建议，写"无——本期各频道均为宏观市场展望，未涉及具体操作建议。"，不需要表格）
+
+### 加仓建议
+
+| 股票代码 | 价格/区间 | 理由 | 来源频道 |
+|---------|----------|------|---------|
+| XXXX | $xxx - $xxx | 理由 | 频道名 |
+
+（如果没有加仓建议，写"无（简短原因）"，不需要表格）
+
+### 卖出建议
+
+| 股票代码 | 价格/区间 | 理由 | 来源频道 |
+|---------|----------|------|---------|
+| XXXX | $xxx - $xxx | 理由 | 频道名 |
+
+（如果没有卖出建议且没有买入/加仓建议，写"无（简短原因）"，不需要表格）
+（如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
 
 ---
 
-# 频道名 — 标题
+# 频道名 — 视频标题
 
 **日期：** YYYY-MM-DD
 
 ## 市场观点
 
-（总结该期博主的整体市场观点）
+- 主题一：概述
+  - 补充细节
+- 主题二：概述
 
-## 买入建议
+（此处只写市场观点，买入/加仓/卖出已在上方综合交易信号中汇总，不再重复）
 
-| 股票代码 | 买入价格/区间 | 理由 |
-|---------|-------------|------|
-| XXXX | $xxx - $xxx | 理由 |
+---
 
-（如果没有买入建议，写"无"，不需要表格）
-
-## 加仓建议
-
-| 股票代码 | 加仓价格/区间 | 理由 |
-|---------|-------------|------|
-| XXXX | $xxx - $xxx | 理由 |
-
-（如果没有加仓建议，写"无"，不需要表格）
-
-## 卖出建议
-
-| 股票代码 | 卖出价格/区间 | 理由 |
-|---------|-------------|------|
-| XXXX | $xxx - $xxx | 理由 |
-
-（如果没有卖出建议且没有买入/加仓建议，写"无"，不需要表格）
-（如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
-
-## 重要
-
-请直接输出结构化总结，不要在开头添加任何思考过程、分析过程或前言文字。输出应以"---"分隔线开头。
+（下一期视频，同上格式）
 
 ## 转录文本
 
@@ -165,6 +177,35 @@ def extract_info_from_path(parsed_path: str) -> tuple[str, str]:
     return "Unknown", "Unknown"
 
 
+def _get_title(parsed_path: str) -> str:
+    """Extract video title from parsed file path stem."""
+    title = Path(parsed_path).stem
+    if title.endswith("_parsed"):
+        title = title[: -len("_parsed")]
+    return title
+
+
+def _blockquote(text: str) -> str:
+    """Wrap text in Markdown blockquote."""
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in text.splitlines())
+
+
+def _append_transcript_single(claude_output: str, text: str) -> str:
+    """Append a single transcript to Claude's output via f-string."""
+    return f"{claude_output}\n\n## 转录文本\n\n{_blockquote(text)}"
+
+
+def _append_transcripts_multi(claude_output: str, parsed_files: list[tuple[str, str, str]], texts: list[str]) -> str:
+    """Append all transcripts at the end of Claude's output."""
+    sections = []
+    for (parsed_path, channel_name, _date), text in zip(parsed_files, texts):
+        title = _get_title(parsed_path)
+        sections.append(f"### {channel_name} — {title}\n\n{_blockquote(text)}")
+
+    transcript_block = "\n\n".join(sections)
+    return f"{claude_output}\n\n---\n\n## 转录文本\n\n{transcript_block}"
+
+
 def summarize_transcript(
     parsed_path: str,
     channel_name: str,
@@ -195,7 +236,7 @@ def summarize_transcript(
             print(f"  Skipping (empty file): {parsed_path}")
         return None
 
-    prompt = SUMMARY_PROMPT_TEMPLATE.format(
+    prompt = SINGLE_PROMPT.format(
         channel_name=channel_name,
         date=date,
         text=text,
@@ -216,7 +257,9 @@ def summarize_transcript(
         if not result.success:
             return SummaryResult(success=False, error=result.error)
 
-        output_path.write_text(result.output, encoding="utf-8")
+        # Append transcript via f-string (not generated by Claude)
+        final_output = _append_transcript_single(result.output, text)
+        output_path.write_text(final_output, encoding="utf-8")
         return SummaryResult(
             success=True,
             output_path=str(output_path),
@@ -229,34 +272,35 @@ def summarize_batch(
     parsed_files: list[tuple[str, str, str]],
     verbose: bool = False,
 ) -> SummaryResult:
-    """Batch mode: multiple _parsed.txt -> one report in .report/summary_{timestamp}.txt.
+    """Batch mode: multiple _parsed.txt -> one report in .storage/reports/summary_{timestamp}.txt.
 
     parsed_files: list of (parsed_path, channel_name, date)
     """
-    # Single file: use the single-video template for better prompt quality
+    # Read all texts upfront
+    texts = []
+    for parsed_path, _channel_name, _date in parsed_files:
+        texts.append(Path(parsed_path).read_text(encoding="utf-8"))
+
     if len(parsed_files) == 1:
         parsed_path, channel_name, date = parsed_files[0]
-        text = Path(parsed_path).read_text(encoding="utf-8")
-        prompt = SUMMARY_PROMPT_TEMPLATE.format(
+        prompt = SINGLE_PROMPT.format(
             channel_name=channel_name,
             date=date,
-            text=text,
+            text=texts[0],
         )
     else:
-        # Build concatenated text block
+        # Build concatenated text block for multi-video prompt
         sections = []
-        for parsed_path, channel_name, date in parsed_files:
-            path = Path(parsed_path)
-            text = path.read_text(encoding="utf-8")
-            title = path.stem
-            if title.endswith("_parsed"):
-                title = title[: -len("_parsed")]
+        for (parsed_path, channel_name, date), text in zip(parsed_files, texts):
+            title = _get_title(parsed_path)
             sections.append(
                 f"--- 频道：{channel_name} | 日期：{date} | 标题：{title} ---\n\n{text}"
             )
-
         combined_texts = "\n\n".join(sections)
-        prompt = BATCH_PROMPT_TEMPLATE.format(texts=combined_texts)
+
+        # Use the date from the first file for the report header
+        report_date = parsed_files[0][2]
+        prompt = MULTI_PROMPT.format(date=report_date, texts=combined_texts)
 
     ts_log = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = f".logs/claude/summary_batch_{ts_log}.jsonl"
@@ -273,12 +317,18 @@ def summarize_batch(
         if not result.success:
             return SummaryResult(success=False, error=result.error)
 
-        # Output to .report/summary_{timestamp}.txt
+        # Append transcripts via f-string (not generated by Claude)
+        if len(parsed_files) == 1:
+            final_output = _append_transcript_single(result.output, texts[0])
+        else:
+            final_output = _append_transcripts_multi(result.output, parsed_files, texts)
+
+        # Output to .storage/reports/summary_{timestamp}.txt
         report_dir = Path(REPORT_DIR)
         report_dir.mkdir(parents=True, exist_ok=True)
         ts_report = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         output_path = report_dir / f"summary_{ts_report}.txt"
-        output_path.write_text(result.output, encoding="utf-8")
+        output_path.write_text(final_output, encoding="utf-8")
 
         return SummaryResult(
             success=True,
