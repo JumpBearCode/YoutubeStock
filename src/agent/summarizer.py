@@ -1,10 +1,49 @@
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from src.agent.claude_runner import run_claude_session
+from dotenv import load_dotenv
+import warnings
 
-SINGLE_PROMPT = """\
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from tavily import TavilyClient
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from langgraph.prebuilt import create_react_agent
+
+# ── Search-conditional prompt fragments ───────────────────────
+
+_SINGLE_SEARCH_RULES_ON = """\
+### 3. 卖出点位补充规则
+- **如果博主没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具，只总结内容和观点即可。
+- **如果博主推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
+- Web search 仅用于查询卖出点位，不用于其他用途。"""
+
+_SINGLE_SEARCH_RULES_OFF = """\
+### 3. 卖出点位说明
+- 仅提取博主在视频中明确提到的卖出点位。
+- 如果博主没有给出卖出建议，写"无"即可，不需要额外补充。"""
+
+_BATCH_SEARCH_RULES_ON = """\
+### 卖出点位补充规则
+- **如果所有频道都没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具。
+- **如果有频道推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
+- Web search 仅用于查询卖出点位，不用于其他用途。"""
+
+_BATCH_SEARCH_RULES_OFF = """\
+### 卖出点位说明
+- 仅提取博主在视频中明确提到的卖出点位。
+- 如果博主没有给出卖出建议，写"无"即可，不需要额外补充。"""
+
+_SELL_NOTE_ON = '（如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）'
+_SELL_NOTE_OFF = '（如果没有卖出建议，写"无（简短原因）"，不需要表格）'
+
+# ── Prompt templates ──────────────────────────────────────────
+
+SUMMARY_PROMPT_TEMPLATE = """\
 你是一个专业的财经视频内容分析助手。以下是来自 YouTube 频道「{channel_name}」于 {date} 发布的视频转录文本。
 
 ## 任务
@@ -22,10 +61,7 @@ SINGLE_PROMPT = """\
 - **加仓点位**：股票代码 + 建议加仓价格/区间 + 理由
 - **卖出点位**：股票代码 + 建议卖出价格/区间 + 理由
 
-### 3. 卖出点位补充规则
-- **如果博主没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具，只总结内容和观点即可。
-- **如果博主推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
-- Web search 仅用于查询卖出点位，不用于其他用途。
+{search_rules}
 
 ## 输出格式
 
@@ -68,14 +104,14 @@ SINGLE_PROMPT = """\
 | XXXX | $xxx - $xxx | 理由 |
 
 （如果没有卖出建议且没有买入/加仓建议，写"无（简短原因）"，不需要表格）
-（如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
+{sell_note}
 
 ## 转录文本
 
 {text}
 """
 
-MULTI_PROMPT = """\
+BATCH_PROMPT_TEMPLATE = """\
 你是一个专业的财经视频内容分析助手。以下是来自多个 YouTube 频道的多期视频转录文本。
 
 ## 任务
@@ -88,10 +124,7 @@ MULTI_PROMPT = """\
 - 使用 Markdown 无序列表（bullet list）分点总结，按主题分条
 - 每条可包含嵌套子点补充细节
 
-### 卖出点位补充规则
-- **如果所有频道都没有推荐任何具体的买入/加仓/卖出操作**，则不使用搜索工具。
-- **如果有频道推荐了买入或加仓但没有给出卖出点位**，请对每只缺少卖出点位的股票**逐只**使用 web search 查询该股票的目标价（target price）或阻力位（resistance level），并在结果中标注"（网络搜索补充）"。
-- Web search 仅用于查询卖出点位，不用于其他用途。
+{search_rules}
 
 ## 输出格式
 
@@ -126,7 +159,7 @@ MULTI_PROMPT = """\
 | XXXX | $xxx - $xxx | 理由 | 频道名 |
 
 （如果没有卖出建议且没有买入/加仓建议，写"无（简短原因）"，不需要表格）
-（如果有买入/加仓但缺少卖出建议，使用搜索补充，在理由列标注"（网络搜索补充）"）
+{sell_note}
 
 ---
 
@@ -151,14 +184,102 @@ MULTI_PROMPT = """\
 {texts}
 """
 
+MODEL = "deepseek-chat"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# Price per 1M tokens (USD) — DeepSeek V3.2
+MODEL_PRICING = {
+    "deepseek-chat": {"input": 0.28, "output": 0.42},
+}
+
 REPORT_DIR = ".storage/reports"
+
+
+MAX_SEARCH_CALLS = 10
+
+
+def _is_search_enabled() -> bool:
+    return os.getenv("TAVILY_SEARCH_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
 @dataclass
 class SummaryResult:
     success: bool
     output_path: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+    search_calls: int = 0
     error: str | None = None
+    prompt: str | None = None
+
+
+def _calc_cost(input_tokens: int, output_tokens: int) -> float:
+    pricing = MODEL_PRICING[MODEL]
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+
+def _create_capped_search_tool(max_calls: int = MAX_SEARCH_CALLS):
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    if not tavily_key:
+        raise ValueError("TAVILY_API_KEY not set in .env")
+    client = TavilyClient(api_key=tavily_key)
+    call_count = 0
+
+    @tool
+    def capped_search(query: str) -> str:
+        """Search the web for stock target prices and resistance levels. Only use this for looking up sell/exit price targets."""
+        nonlocal call_count
+        if call_count >= max_calls:
+            return "搜索次数已达上限，请根据已有信息完成分析。"
+        call_count += 1
+        response = client.search(query, max_results=5, topic="finance")
+        results = response.get("results", [])
+        if not results:
+            return "未找到相关结果。"
+        return "\n\n".join(
+            f"{r['title']}\n{r['content']}\n{r['url']}" for r in results
+        )
+
+    return capped_search, lambda: call_count
+
+
+def _run_agent(prompt: str, search_enabled: bool) -> tuple[str, int, int, int]:
+    """Run the ReAct agent with the given prompt. Returns (content, input_tokens, output_tokens, search_calls)."""
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("DEEPSEEK_API_KEY not set in .env")
+
+    llm = ChatOpenAI(
+        model=MODEL,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=api_key,
+    )
+
+    if search_enabled:
+        search_tool, get_call_count = _create_capped_search_tool()
+        tools = [search_tool]
+    else:
+        get_call_count = lambda: 0
+        tools = []
+
+    agent = create_react_agent(llm, tools=tools)
+
+    result = agent.invoke({"messages": [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "请开始分析。"},
+    ]})
+
+    total_input = 0
+    total_output = 0
+    for msg in result["messages"]:
+        usage = getattr(msg, "usage_metadata", None)
+        if usage:
+            total_input += usage.get("input_tokens", 0)
+            total_output += usage.get("output_tokens", 0)
+
+    final_content = result["messages"][-1].content
+    return final_content, total_input, total_output, get_call_count()
 
 
 def extract_info_from_path(parsed_path: str) -> tuple[str, str]:
@@ -190,20 +311,20 @@ def _blockquote(text: str) -> str:
     return "\n".join(f"> {line}" if line.strip() else ">" for line in text.splitlines())
 
 
-def _append_transcript_single(claude_output: str, text: str) -> str:
-    """Append a single transcript to Claude's output via f-string."""
-    return f"{claude_output}\n\n## 转录文本\n\n{_blockquote(text)}"
+def _append_transcript_single(agent_output: str, text: str) -> str:
+    """Append a single transcript to agent's output."""
+    return f"{agent_output}\n\n## 转录文本\n\n{_blockquote(text)}"
 
 
-def _append_transcripts_multi(claude_output: str, parsed_files: list[tuple[str, str, str]], texts: list[str]) -> str:
-    """Append all transcripts at the end of Claude's output."""
+def _append_transcripts_multi(agent_output: str, parsed_files: list[tuple[str, str, str]], texts: list[str]) -> str:
+    """Append all transcripts at the end of agent's output."""
     sections = []
     for (parsed_path, channel_name, _date), text in zip(parsed_files, texts):
         title = _get_title(parsed_path)
         sections.append(f"### {channel_name} — {title}\n\n{_blockquote(text)}")
 
     transcript_block = "\n\n".join(sections)
-    return f"{claude_output}\n\n---\n\n## 转录文本\n\n{transcript_block}"
+    return f"{agent_output}\n\n---\n\n## 转录文本\n\n{transcript_block}"
 
 
 def summarize_transcript(
@@ -214,6 +335,8 @@ def summarize_transcript(
 ) -> SummaryResult | None:
     """Single-file mode: one _parsed.txt -> one _summary.txt in the same directory.
     Returns SummaryResult on success/failure, None if skipped."""
+    load_dotenv()
+
     path = Path(parsed_path)
     if not path.exists():
         return SummaryResult(success=False, error=f"File not found: {parsed_path}")
@@ -236,33 +359,29 @@ def summarize_transcript(
             print(f"  Skipping (empty file): {parsed_path}")
         return None
 
-    prompt = SINGLE_PROMPT.format(
-        channel_name=channel_name,
-        date=date,
-        text=text,
-    )
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = f".logs/claude/summary_{timestamp}.jsonl"
-
     try:
-        result = run_claude_session(
-            prompt=prompt,
-            tools="WebSearch,WebFetch",
-            allowed_tools=["WebSearch", "WebFetch"],
-            model="sonnet",
-            log_path=log_path,
+        search_enabled = _is_search_enabled()
+        prompt = SUMMARY_PROMPT_TEMPLATE.format(
+            channel_name=channel_name,
+            date=date,
+            text=text,
+            search_rules=_SINGLE_SEARCH_RULES_ON if search_enabled else _SINGLE_SEARCH_RULES_OFF,
+            sell_note=_SELL_NOTE_ON if search_enabled else _SELL_NOTE_OFF,
         )
+        content, total_input, total_output, search_calls = _run_agent(prompt, search_enabled)
+        cost = _calc_cost(total_input, total_output)
 
-        if not result.success:
-            return SummaryResult(success=False, error=result.error)
-
-        # Append transcript via f-string (not generated by Claude)
-        final_output = _append_transcript_single(result.output, text)
+        # Append transcript via f-string (not generated by agent)
+        final_output = _append_transcript_single(content, text)
         output_path.write_text(final_output, encoding="utf-8")
         return SummaryResult(
             success=True,
             output_path=str(output_path),
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cost=cost,
+            search_calls=search_calls,
+            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))
@@ -276,17 +395,23 @@ def summarize_batch(
 
     parsed_files: list of (parsed_path, channel_name, date)
     """
+    load_dotenv()
+
     # Read all texts upfront
     texts = []
     for parsed_path, _channel_name, _date in parsed_files:
         texts.append(Path(parsed_path).read_text(encoding="utf-8"))
 
+    search_enabled = _is_search_enabled()
+
     if len(parsed_files) == 1:
         parsed_path, channel_name, date = parsed_files[0]
-        prompt = SINGLE_PROMPT.format(
+        prompt = SUMMARY_PROMPT_TEMPLATE.format(
             channel_name=channel_name,
             date=date,
             text=texts[0],
+            search_rules=_SINGLE_SEARCH_RULES_ON if search_enabled else _SINGLE_SEARCH_RULES_OFF,
+            sell_note=_SELL_NOTE_ON if search_enabled else _SELL_NOTE_OFF,
         )
     else:
         # Build concatenated text block for multi-video prompt
@@ -300,28 +425,22 @@ def summarize_batch(
 
         # Use the date from the first file for the report header
         report_date = parsed_files[0][2]
-        prompt = MULTI_PROMPT.format(date=report_date, texts=combined_texts)
-
-    ts_log = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = f".logs/claude/summary_batch_{ts_log}.jsonl"
-
-    try:
-        result = run_claude_session(
-            prompt=prompt,
-            tools="WebSearch,WebFetch",
-            allowed_tools=["WebSearch", "WebFetch"],
-            model="sonnet",
-            log_path=log_path,
+        prompt = BATCH_PROMPT_TEMPLATE.format(
+            date=report_date,
+            texts=combined_texts,
+            search_rules=_BATCH_SEARCH_RULES_ON if search_enabled else _BATCH_SEARCH_RULES_OFF,
+            sell_note=_SELL_NOTE_ON if search_enabled else _SELL_NOTE_OFF,
         )
 
-        if not result.success:
-            return SummaryResult(success=False, error=result.error)
+    try:
+        content, total_input, total_output, search_calls = _run_agent(prompt, search_enabled)
+        cost = _calc_cost(total_input, total_output)
 
-        # Append transcripts via f-string (not generated by Claude)
+        # Append transcripts via f-string (not generated by agent)
         if len(parsed_files) == 1:
-            final_output = _append_transcript_single(result.output, texts[0])
+            final_output = _append_transcript_single(content, texts[0])
         else:
-            final_output = _append_transcripts_multi(result.output, parsed_files, texts)
+            final_output = _append_transcripts_multi(content, parsed_files, texts)
 
         # Output to .storage/reports/summary_{timestamp}.txt
         report_dir = Path(REPORT_DIR)
@@ -333,6 +452,11 @@ def summarize_batch(
         return SummaryResult(
             success=True,
             output_path=str(output_path),
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cost=cost,
+            search_calls=search_calls,
+            prompt=prompt,
         )
     except Exception as e:
         return SummaryResult(success=False, error=str(e))

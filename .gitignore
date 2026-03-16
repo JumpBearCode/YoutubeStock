@@ -17,3 +17,4 @@ wheels/
 # Environment
 .env
 .DS_Store
+logs

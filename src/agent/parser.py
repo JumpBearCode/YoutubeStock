@@ -1,8 +1,9 @@
+import os
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
-from src.agent.claude_runner import run_claude_session
+from dotenv import load_dotenv
+from openai import OpenAI
 
 INSTRUCTIONS = """\
 你是一个专业的文字整理助手，负责将 YouTube 视频自动转录（Whisper）生成的逐行碎片文本重组为自然、可读的段落。
@@ -36,16 +37,37 @@ INSTRUCTIONS = """\
 6. **纯净输出**：只输出整理后的文本，不要添加标题、总结、评论或任何额外内容。
 """
 
+# Price per 1M tokens (USD)
+MODEL_PRICING = {
+    "glm-4.7-flash": {"input": 0.0, "output": 0.0},
+    "glm-4.7-flashx": {"input": 0.07, "output": 0.40},
+}
+
+GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+DEFAULT_MODEL = "glm-4.7-flash"
+
 
 @dataclass
 class ParseResult:
     success: bool
     output_path: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
     error: str | None = None
 
 
-def parse_transcript(txt_path: str, model: str = "sonnet", verbose: bool = False) -> ParseResult | None:
+def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    pricing = MODEL_PRICING.get(model)
+    if not pricing:
+        return 0.0
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+
+def parse_transcript(txt_path: str, model: str = DEFAULT_MODEL, verbose: bool = False) -> ParseResult | None:
     """Returns ParseResult on success/failure, None if skipped (already exists)."""
+    load_dotenv()
+
     path = Path(txt_path)
     if not path.exists():
         print(f"  Error: File not found: {txt_path}")
@@ -62,27 +84,32 @@ def parse_transcript(txt_path: str, model: str = "sonnet", verbose: bool = False
         print(f"  Skipping (empty file): {txt_path}")
         return None
 
-    prompt = INSTRUCTIONS + "\n\n---\n\n" + text_content
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = f".logs/claude/parse_{timestamp}.jsonl"
+    api_key = os.getenv("GLM_API_KEY")
+    if not api_key:
+        return ParseResult(success=False, error="GLM_API_KEY not set in .env")
 
     try:
-        result = run_claude_session(
-            prompt=prompt,
-            tools="",
+        client = OpenAI(api_key=api_key, base_url=GLM_BASE_URL)
+        response = client.chat.completions.create(
             model=model,
-            log_path=log_path,
+            messages=[
+                {"role": "system", "content": INSTRUCTIONS},
+                {"role": "user", "content": text_content},
+            ],
         )
 
-        if not result.success:
-            print(f"  Parse FAILED: {result.error}")
-            return ParseResult(success=False, error=result.error)
+        content = response.choices[0].message.content
+        input_tokens = response.usage.prompt_tokens if response.usage else 0
+        output_tokens = response.usage.completion_tokens if response.usage else 0
+        cost = _calc_cost(model, input_tokens, output_tokens)
 
-        output_path.write_text(result.output, encoding="utf-8")
+        output_path.write_text(content, encoding="utf-8")
         return ParseResult(
             success=True,
             output_path=str(output_path),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost=cost,
         )
     except Exception as e:
         print(f"  Parse FAILED: {e}")

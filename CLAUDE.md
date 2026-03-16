@@ -29,13 +29,13 @@ uv run python cli.py transcript --channel "老李玩钱"    # Specific channel
 uv run python cli.py transcript --path path/to/file.mp3  # Single file
 uv run python cli.py transcript --language zh -v       # Force language, verbose
 
-# Parse: merge Whisper fragments into paragraphs, fix transliterations (requires OPENAI_API_KEY)
+# Parse: merge Whisper fragments into paragraphs, fix transliterations (requires GLM_API_KEY)
 uv run python cli.py parse                            # All channels
 uv run python cli.py parse --channel "老李玩钱"         # Specific channel
 uv run python cli.py parse --path path/to/file.txt     # Single file
-uv run python cli.py parse --model gpt-5.1             # Use gpt-5.1 (default: gpt-5-mini)
+uv run python cli.py parse --model glm-4-flash         # GLM-4-Flash (default, free)
 
-# Summary: extract market views & trade signals via ReAct agent (requires OPENAI_API_KEY)
+# Summary: extract market views & trade signals via ReAct agent (requires DEEPSEEK_API_KEY)
 uv run python cli.py summary                           # All channels → .report/summary_{ts}.txt
 uv run python cli.py summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
 uv run python cli.py summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
@@ -45,11 +45,11 @@ There are no tests, linter, or type checker configured.
 
 ## Architecture
 
-The CLI (`cli.py`, Typer) has six commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), `summary` (extract market views & trade signals via LangChain ReAct agent with web search), and `run` (full pipeline: download → transcribe → parse → summary → email). Download commands pull video+audio with sleep delays between downloads.
+The CLI (`cli.py`, Typer) has six commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via GLM-4-Flash), `summary` (extract market views & trade signals via DeepSeek V3.2 ReAct agent with DuckDuckGo search), and `run` (full pipeline: download → transcribe → parse → summary → email). Download commands pull video+audio with sleep delays between downloads.
 
 **Data flow:**
 - **Download pipeline:** `config.py` → `youtube.resolve_channel` (URL → channel_id/name via yt-dlp, cached) → `youtube.get_latest_videos` (yt-dlp flat extraction with approximate dates, filters upcoming/live) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
-- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
+- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via GLM-4-Flash) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via DeepSeek V3.2 ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
 
 Key modules in `src/`:
 - **cli.py** (root) — Typer CLI entry point, all commands and orchestration logic
@@ -57,8 +57,8 @@ Key modules in `src/`:
 - **downloader.py** — Wraps yt-dlp for video/audio downloads with 3-retry exponential backoff
 - **storage.py** — `StorageManager` handles download history (per-channel JSON) and output directory structure
 - **transcriber.py** — Audio compression (ffmpeg), chunking for large files, Whisper API transcription (Groq default, OpenAI fallback), JSON + TXT output. Supports multiple API keys with automatic fallback (free → paid)
-- **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses OpenAI Agents SDK (gpt-5-mini default). Outputs `_parsed.txt`
-- **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using LangChain ReAct agent (gpt-5.1) + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
+- **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses GLM-4-Flash (智谱, free) via OpenAI-compatible API. Outputs `_parsed.txt`
+- **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using DeepSeek V3.2 ($0.28/$0.42 per 1M tokens) via LangChain ReAct agent + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
 - **emailer.py** — Sends summary report via Gmail SMTP (App Password). Uses only Python built-in `smtplib` + `email`. Subject: `每日美股总结 {YYYY-MM-DD}`. Configured via `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `GMAIL_RECIPIENT` in `.env`
 - **models.py** — Dataclasses: `ChannelConfig`, `VideoInfo`, `DownloadResult`, `TranscriptResult`
 - **sleep_strategy.py** — Triangular-distribution random delays between downloads
@@ -79,7 +79,7 @@ Configured via `.env` (see `.env.example`). Supports two providers:
 
 Set `TRANSCRIPTION_PROVIDER=groq` or `openai` in `.env`.
 
-`OPENAI_API_KEY` is also required for the `parse` and `summary` commands. The `summary` command uses DuckDuckGo for web search (no extra API key needed).
+`GLM_API_KEY` is required for the `parse` command (GLM-4-Flash, free). `DEEPSEEK_API_KEY` is required for the `summary` command (DeepSeek V3.2). The `summary` command uses DuckDuckGo for web search (no extra API key needed).
 
 ## Email
 
