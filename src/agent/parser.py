@@ -1,8 +1,9 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents import Agent, Runner
 from dotenv import load_dotenv
+from openai import OpenAI
 
 INSTRUCTIONS = """\
 你是一个专业的文字整理助手，负责将 YouTube 视频自动转录（Whisper）生成的逐行碎片文本重组为自然、可读的段落。
@@ -38,9 +39,12 @@ INSTRUCTIONS = """\
 
 # Price per 1M tokens (USD)
 MODEL_PRICING = {
-    "gpt-5-mini": {"input": 0.25, "output": 2.00},
-    "gpt-5.1": {"input": 1.25, "output": 10.00},
+    "glm-4.7-flash": {"input": 0.0, "output": 0.0},
+    "glm-4.7-flashx": {"input": 0.07, "output": 0.40},
 }
+
+GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+DEFAULT_MODEL = "glm-4.7-flash"
 
 
 @dataclass
@@ -60,15 +64,7 @@ def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
 
 
-def create_parse_agent(model: str = "gpt-5-mini") -> Agent:
-    return Agent(
-        name="transcript_parser",
-        instructions=INSTRUCTIONS,
-        model=model,
-    )
-
-
-def parse_transcript(txt_path: str, model: str = "gpt-5-mini", verbose: bool = False) -> ParseResult | None:
+def parse_transcript(txt_path: str, model: str = DEFAULT_MODEL, verbose: bool = False) -> ParseResult | None:
     """Returns ParseResult on success/failure, None if skipped (already exists)."""
     load_dotenv()
 
@@ -88,15 +84,26 @@ def parse_transcript(txt_path: str, model: str = "gpt-5-mini", verbose: bool = F
         print(f"  Skipping (empty file): {txt_path}")
         return None
 
-    try:
-        agent = create_parse_agent(model)
-        result = Runner.run_sync(agent, input=text_content)
+    api_key = os.getenv("GLM_API_KEY")
+    if not api_key:
+        return ParseResult(success=False, error="GLM_API_KEY not set in .env")
 
-        input_tokens = sum(r.usage.input_tokens for r in result.raw_responses if r.usage)
-        output_tokens = sum(r.usage.output_tokens for r in result.raw_responses if r.usage)
+    try:
+        client = OpenAI(api_key=api_key, base_url=GLM_BASE_URL)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": INSTRUCTIONS},
+                {"role": "user", "content": text_content},
+            ],
+        )
+
+        content = response.choices[0].message.content
+        input_tokens = response.usage.prompt_tokens if response.usage else 0
+        output_tokens = response.usage.completion_tokens if response.usage else 0
         cost = _calc_cost(model, input_tokens, output_tokens)
 
-        output_path.write_text(result.final_output, encoding="utf-8")
+        output_path.write_text(content, encoding="utf-8")
         return ParseResult(
             success=True,
             output_path=str(output_path),

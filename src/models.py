@@ -22,7 +22,6 @@ class VideoInfo:
 @dataclass
 class DownloadResult:
     video_info: VideoInfo
-    media_type: str  # "video" or "audio"
     success: bool
     file_path: str | None = None
     error: str | None = None

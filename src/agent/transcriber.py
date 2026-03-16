@@ -6,7 +6,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from .models import TranscriptResult
+from ..models import TranscriptResult
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 CHUNK_DURATION_MINUTES = 20

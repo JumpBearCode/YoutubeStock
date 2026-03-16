@@ -9,13 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
-# YoutubeStock storage
+# YoutubeStock storage (includes reports in .storage/reports/)
 .storage/
-# YoutubeStock summary
-.report/
 # YoutubeStock logs
 .logs/
 
 # Environment
 .env
 .DS_Store
+logs

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcriber, and AI analyst. It detects new videos via YouTube RSS feeds, downloads both video (mp4) and audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, summarizes investment views with buy/sell signals using a ReAct agent, and emails the daily report via Gmail SMTP.
+YoutubeStock is a YouTube channel monitor, audio downloader, audio transcriber, and AI analyst. It detects new videos via yt-dlp flat extraction (with approximate dates and upcoming/live stream filtering), downloads audio (mp3) using yt-dlp, transcribes audio to timestamped JSON + plain text using Whisper API (Groq or OpenAI), parses fragmented transcripts into clean paragraphs, summarizes investment views with buy/sell signals using a ReAct agent, and emails the daily report via Gmail SMTP.
 
 ## Commands
 
@@ -12,48 +12,53 @@ YoutubeStock is a YouTube channel monitor, video/audio downloader, audio transcr
 # Install dependencies (requires ffmpeg: brew install ffmpeg)
 uv sync
 
-# Run the CLI
-uv run python -m src.cli download          # Download latest N videos per channel
-uv run python -m src.cli check             # Check for new videos only
-uv run python -m src.cli download --verbose # With verbose output
+# Run the CLI (Typer, supports -h for help)
+uv run python cli.py -h                    # Show all commands
+uv run python cli.py download              # Download latest N videos per channel
+uv run python cli.py check                 # Check for new videos only
+uv run python cli.py download --verbose    # With verbose output
+
+# Full pipeline: download → transcribe → parse → summary → email
+uv run python cli.py run                   # Default: last_n=1
+uv run python cli.py run --last_n 3 -v     # 3 videos per channel, verbose
+uv run python cli.py run --force-summary   # Always run summary even if no new videos
 
 # Transcribe audio to JSON + TXT (requires API key in .env, see .env.example)
-uv run python -m src.cli transcript                       # All channels
-uv run python -m src.cli transcript --channel "老李玩钱"    # Specific channel
-uv run python -m src.cli transcript --path path/to/file.mp3  # Single file
-uv run python -m src.cli transcript --language zh -v       # Force language, verbose
+uv run python cli.py transcript                       # All channels
+uv run python cli.py transcript --channel "老李玩钱"    # Specific channel
+uv run python cli.py transcript --path path/to/file.mp3  # Single file
+uv run python cli.py transcript --language zh -v       # Force language, verbose
 
-# Parse: merge Whisper fragments into paragraphs, fix transliterations (requires OPENAI_API_KEY)
-uv run python -m src.cli parse                            # All channels
-uv run python -m src.cli parse --channel "老李玩钱"         # Specific channel
-uv run python -m src.cli parse --path path/to/file.txt     # Single file
-uv run python -m src.cli parse --model gpt-5.1             # Use gpt-5.1 (default: gpt-5-mini)
+# Parse: merge Whisper fragments into paragraphs, fix transliterations (requires GLM_API_KEY)
+uv run python cli.py parse                            # All channels
+uv run python cli.py parse --channel "老李玩钱"         # Specific channel
+uv run python cli.py parse --path path/to/file.txt     # Single file
+uv run python cli.py parse --model glm-4-flash         # GLM-4-Flash (default, free)
 
-# Summary: extract market views & trade signals via ReAct agent (requires OPENAI_API_KEY)
-uv run python -m src.cli summary                           # All channels → .report/summary_{ts}.txt
-uv run python -m src.cli summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
-uv run python -m src.cli summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
+# Summary: extract market views & trade signals via ReAct agent (requires DEEPSEEK_API_KEY)
+uv run python cli.py summary                           # All channels → .report/summary_{ts}.txt
+uv run python cli.py summary --channel "老李玩钱"       # Single channel → .report/summary_{ts}.txt
+uv run python cli.py summary --path path/to/_parsed.txt # Single file → _summary.txt in same dir
 ```
 
 There are no tests, linter, or type checker configured.
 
 ## Architecture
 
-The CLI has five commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via OpenAI Agents SDK), and `summary` (extract market views & trade signals via LangChain ReAct agent with web search). Download commands pull video+audio with sleep delays between downloads. The full pipeline (`main.py`) runs all phases sequentially and emails the final report via Gmail SMTP.
+The CLI (`cli.py`, Typer) has six commands: `download` (batch pull recent N videos), `check` (incremental sync of new videos only), `transcript` (convert downloaded audio to JSON + TXT via Whisper API), `parse` (merge Whisper fragments into paragraphs via GLM-4-Flash), `summary` (extract market views & trade signals via DeepSeek V3.2 ReAct agent with DuckDuckGo search), and `run` (full pipeline: download → transcribe → parse → summary → email). Download commands pull video+audio with sleep delays between downloads.
 
 **Data flow:**
-- **Download pipeline:** `config.py` → `resolver` (URL → channel_id/name via yt-dlp, cached) → `rss` (channel_id → RSS feed → VideoInfo list) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
-- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via OpenAI Agents SDK) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via LangChain ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
+- **Download pipeline:** `config.py` → `youtube.resolve_channel` (URL → channel_id/name via yt-dlp, cached) → `youtube.get_latest_videos` (yt-dlp flat extraction with approximate dates, filters upcoming/live) → `downloader` (yt-dlp download with retry) → `storage` (track download history as JSON)
+- **Analysis pipeline:** `transcript` (audio → `.json` + `.txt`) → `parse` (`.txt` → `_parsed.txt` via GLM-4-Flash) → `summary` (`_parsed.txt` → `_summary.txt` or `.report/summary_{ts}.txt` via DeepSeek V3.2 ReAct agent + DuckDuckGo search) → `emailer` (send report via Gmail SMTP)
 
 Key modules in `src/`:
-- **cli.py** — Entry point, argparse commands, orchestration loop for all commands
-- **resolver.py** — Resolves channel URLs (@handle or /channel/UCxxx) to channel_id + name; caches results in `.storage/channel_cache.json`
-- **rss.py** — Fetches YouTube RSS XML feeds via feedparser, parses into `VideoInfo`
+- **cli.py** (root) — Typer CLI entry point, all commands and orchestration logic
+- **youtube.py** — Resolves channel URLs (@handle or /channel/UCxxx) to channel_id + name (cached in `.storage/channel_cache.json`); fetches latest videos via yt-dlp flat extraction with `approximate_date` for timestamps and `live_status` filtering (skips upcoming/live streams)
 - **downloader.py** — Wraps yt-dlp for video/audio downloads with 3-retry exponential backoff
 - **storage.py** — `StorageManager` handles download history (per-channel JSON) and output directory structure
 - **transcriber.py** — Audio compression (ffmpeg), chunking for large files, Whisper API transcription (Groq default, OpenAI fallback), JSON + TXT output. Supports multiple API keys with automatic fallback (free → paid)
-- **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses OpenAI Agents SDK (gpt-5-mini default). Outputs `_parsed.txt`
-- **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using LangChain ReAct agent (gpt-5.1) + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
+- **parser.py** — Parse agent: merges Whisper fragmented lines into natural paragraphs, fixes stock name transliterations (e.g. "按摩店"→AMD). Uses GLM-4-Flash (智谱, free) via OpenAI-compatible API. Outputs `_parsed.txt`
+- **summarizer.py** — Summary agent: extracts market views, buy/add/sell signals from `_parsed.txt` using DeepSeek V3.2 ($0.28/$0.42 per 1M tokens) via LangChain ReAct agent + DuckDuckGo search (capped at 5 calls). `--path` mode outputs `_summary.txt` per file; channel/all mode outputs one report to `.report/summary_{timestamp}.txt` with per-video sections
 - **emailer.py** — Sends summary report via Gmail SMTP (App Password). Uses only Python built-in `smtplib` + `email`. Subject: `每日美股总结 {YYYY-MM-DD}`. Configured via `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `GMAIL_RECIPIENT` in `.env`
 - **models.py** — Dataclasses: `ChannelConfig`, `VideoInfo`, `DownloadResult`, `TranscriptResult`
 - **sleep_strategy.py** — Triangular-distribution random delays between downloads
@@ -74,11 +79,11 @@ Configured via `.env` (see `.env.example`). Supports two providers:
 
 Set `TRANSCRIPTION_PROVIDER=groq` or `openai` in `.env`.
 
-`OPENAI_API_KEY` is also required for the `parse` and `summary` commands. The `summary` command uses DuckDuckGo for web search (no extra API key needed).
+`GLM_API_KEY` is required for the `parse` command (GLM-4-Flash, free). `DEEPSEEK_API_KEY` is required for the `summary` command (DeepSeek V3.2). The `summary` command uses DuckDuckGo for web search (no extra API key needed).
 
 ## Email
 
-After batch summary, `main.py` sends the report via Gmail SMTP (Phase 3). Configured via `.env`:
+After batch summary, `cli.py run` sends the report via Gmail SMTP (Phase 3). Configured via `.env`:
 - `GMAIL_ADDRESS` — Gmail account
 - `GMAIL_APP_PASSWORD` — 16-char App Password (Google Account → 2-Step Verification → App Passwords)
 - `GMAIL_RECIPIENT` — Recipient email (defaults to self)
